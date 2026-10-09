@@ -1,0 +1,19 @@
+# Build and local outputs
+**/bin/
+**/obj/
+**/artifacts/
+**/evidence/
+.vs/
+*.user
+*.suo
+*.pdb
+*.log
+
+# Personal settings and credentials
+settings.json
+.env
+.env.*
+!.env.example
+
+# Downloadable executables belong in GitHub Releases
+*.exe

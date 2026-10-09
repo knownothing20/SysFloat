@@ -6,7 +6,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ApplicationIcon>Assets\SysFloat.ico</ApplicationIcon>
     <AssemblyName>SysFloat</AssemblyName>
-    <Version>1.0.1</Version>
+    <Version>1.0.2</Version>
     <RootNamespace>SysFloat</RootNamespace>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>

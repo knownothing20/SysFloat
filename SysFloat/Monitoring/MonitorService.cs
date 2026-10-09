@@ -25,6 +25,7 @@ namespace SysFloat.Monitoring
         private readonly CpuMonitor _cpuMonitor = new CpuMonitor();
         private readonly MemoryMonitor _memoryMonitor = new MemoryMonitor();
         private readonly GpuMemoryMonitor _gpuMonitor = new GpuMemoryMonitor();
+        private readonly ProcessMemoryCollector _processMemoryCollector = new ProcessMemoryCollector();
         private readonly ProcessCpuTracker _processCpuTracker = new ProcessCpuTracker();
         private readonly ProcessVramMonitor _processVramMonitor = new ProcessVramMonitor();
         private readonly object _lifecycleLock = new object();
@@ -41,6 +42,8 @@ namespace SysFloat.Monitoring
         private int _processGeneration;
         private ProcessMetric _rankingMetric = ProcessMetric.Memory;
         private bool _cpuProcessesAvailable;
+        private bool _memoryProcessesAvailable = true;
+        private string _memoryProcessesStatus = string.Empty;
         private bool _vramProcessesAvailable;
         private string _vramProcessesStatus = ProcessVramMonitor.WaitingStatus;
         private List<ProcessInfo> _topCpuProcesses = new List<ProcessInfo>();
@@ -158,6 +161,8 @@ namespace SysFloat.Monitoring
                             break;
                         case ProcessMetric.Memory:
                             _topMemoryProcesses = result.Processes;
+                            _memoryProcessesAvailable = result.Available;
+                            _memoryProcessesStatus = result.Status;
                             break;
                         case ProcessMetric.Vram:
                             _topVramProcesses = result.Processes;
@@ -192,12 +197,9 @@ namespace SysFloat.Monitoring
                 case ProcessMetric.Vram:
                     return CollectVramProcesses(generation);
 
+                case ProcessMetric.Memory:
                 default:
-                    return new ProcessCollectionResult
-                    {
-                        Processes = CollectMemoryProcesses(generation),
-                        Available = true
-                    };
+                    return CollectMemoryProcesses(generation);
             }
         }
 
@@ -246,53 +248,16 @@ namespace SysFloat.Monitoring
             return samples;
         }
 
-        private List<ProcessInfo> CollectMemoryProcesses(int generation)
+        private ProcessCollectionResult CollectMemoryProcesses(int generation)
         {
-            var processesByMemory = new List<ProcessInfo>();
-            Process[] processes;
-            try
+            ProcessMemoryCollectionResult collection = _processMemoryCollector.Collect(
+                () => IsProcessGenerationCurrent(generation));
+            return new ProcessCollectionResult
             {
-                processes = Process.GetProcesses();
-            }
-            catch
-            {
-                return processesByMemory;
-            }
-
-            foreach (var process in processes)
-            {
-                try
-                {
-                    if (!IsProcessGenerationCurrent(generation))
-                        continue;
-
-                    string name = process.ProcessName;
-                    if (FilteredProcesses.Contains(name))
-                        continue;
-
-                    long workingSetBytes = process.WorkingSet64;
-                    if (workingSetBytes < 0)
-                        continue;
-
-                    processesByMemory.Add(new ProcessInfo
-                    {
-                        ProcessId = process.Id,
-                        Name = name,
-                        MemoryBytes = (ulong)workingSetBytes
-                    });
-                }
-                catch { }
-                finally
-                {
-                    process.Dispose();
-                }
-            }
-
-            return processesByMemory
-                .OrderByDescending(process => process.MemoryBytes)
-                .ThenBy(process => process.Name, StringComparer.OrdinalIgnoreCase)
-                .Take(5)
-                .ToList();
+                Processes = collection.Processes,
+                Available = collection.Available,
+                Status = collection.Status
+            };
         }
 
         private ProcessCollectionResult CollectVramProcesses(int generation)
@@ -394,6 +359,8 @@ namespace SysFloat.Monitoring
                         snapshot.TopMemoryProcesses = CloneProcessList(_topMemoryProcesses);
                         snapshot.TopVramProcesses = CloneProcessList(_topVramProcesses);
                         snapshot.CpuProcessesAvailable = _cpuProcessesAvailable;
+                        snapshot.MemoryProcessesAvailable = _memoryProcessesAvailable;
+                        snapshot.MemoryProcessesStatus = _memoryProcessesStatus;
                         snapshot.VramProcessesAvailable = _vramProcessesAvailable;
                         snapshot.VramProcessesStatus = _vramProcessesStatus;
                     }
@@ -420,6 +387,8 @@ namespace SysFloat.Monitoring
                 _topMemoryProcesses = new List<ProcessInfo>();
                 _topVramProcesses = new List<ProcessInfo>();
                 _cpuProcessesAvailable = false;
+                _memoryProcessesAvailable = true;
+                _memoryProcessesStatus = string.Empty;
                 _vramProcessesAvailable = false;
                 _vramProcessesStatus = ProcessVramMonitor.WaitingStatus;
             }
@@ -430,6 +399,8 @@ namespace SysFloat.Monitoring
             return processes.Select(process => new ProcessInfo
             {
                 ProcessId = process.ProcessId,
+                ProcessCount = process.ProcessCount,
+                MemoryIsPartial = process.MemoryIsPartial,
                 Name = process.Name,
                 CpuPercent = process.CpuPercent,
                 MemoryPercent = process.MemoryPercent,

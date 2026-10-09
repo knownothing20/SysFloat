@@ -21,6 +21,9 @@ namespace SysFloat.UI
         private readonly float[] _cpuHistory = CreateHistory();
         private readonly float[] _ramHistory = CreateHistory();
         private readonly float[] _vramHistory = CreateHistory();
+        private readonly float[] _cpuDrawHistory = new float[60];
+        private readonly float[] _ramDrawHistory = new float[60];
+        private readonly float[] _vramDrawHistory = new float[60];
         private int _historyIndex;
         private int _historyCount;
         private readonly object _snapshotGate = new object();
@@ -46,7 +49,6 @@ namespace SysFloat.UI
         private ToolTip _metricToolTip;
         private Rectangle[] _metricHitRects = new Rectangle[0];
         private int _activeMetric = -1;
-        private string _lastClockText;
         private volatile bool _disposed;
         private int _activeAlertMetrics;
 
@@ -283,21 +285,23 @@ namespace SysFloat.UI
             {
                 if (_settings.AlwaysOnTop && Visible) ForceTopMost();
             };
-            _topMostTimer.Start();
+            if (Visible && _settings.AlwaysOnTop) _topMostTimer.Start();
         }
 
         private void SetupClockTimer()
         {
-            _clockTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+            _clockTimer = new System.Windows.Forms.Timer { Interval = MillisecondsUntilNextMinute() };
             _clockTimer.Tick += (s, e) =>
             {
-                string current = DateTime.UtcNow.ToString("yyyyMMddHHmm");
-                if (current != _lastClockText)
-                {
-                    _lastClockText = current;
-                    Invalidate();
-                }
+                _clockTimer.Interval = MillisecondsUntilNextMinute();
+                if (Visible) Invalidate();
             };
+        }
+
+        private static int MillisecondsUntilNextMinute()
+        {
+            var utc = DateTime.UtcNow;
+            return Math.Max(1, 60000 - utc.Second * 1000 - utc.Millisecond);
         }
 
         public void ApplyMonitoringSettings()
@@ -351,11 +355,14 @@ namespace SysFloat.UI
             if (Visible)
             {
                 ForceTopMost();
+                if (_settings.AlwaysOnTop) _topMostTimer?.Start();
+                if (_clockTimer != null) _clockTimer.Interval = MillisecondsUntilNextMinute();
                 _clockTimer?.Start();
             }
             else
             {
                 _clockTimer?.Stop();
+                _topMostTimer?.Stop();
                 HideMetricToolTip();
             }
             ApplyMonitoringSettings();
@@ -376,6 +383,8 @@ namespace SysFloat.UI
             _settings.AlwaysOnTop = topMost;
             TopMost = topMost;
             ForceTopMost();
+            if (topMost && Visible) _topMostTimer?.Start();
+            else _topMostTimer?.Stop();
             _settingsStore.Save(_settings);
             TopMostChanged?.Invoke(topMost);
             UpdateMenuChecks();
@@ -490,7 +499,8 @@ namespace SysFloat.UI
 
         private float[] GetChronologicalHistory(float[] history)
         {
-            var result = new float[history.Length];
+            var result = ReferenceEquals(history, _cpuHistory) ? _cpuDrawHistory :
+                ReferenceEquals(history, _ramHistory) ? _ramDrawHistory : _vramDrawHistory;
             int first = (_historyIndex - _historyCount + history.Length) % history.Length;
             for (int i = 0; i < result.Length; i++) result[i] = i < _historyCount ? history[(first + i) % history.Length] : -1;
             return result;

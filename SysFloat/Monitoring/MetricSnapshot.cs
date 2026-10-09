@@ -21,6 +21,8 @@ namespace SysFloat.Monitoring
         public bool VramAvailable { get; set; }
         public ProcessMetric RankingMetric { get; set; } = ProcessMetric.Memory;
         public bool CpuProcessesAvailable { get; set; }
+        public bool MemoryProcessesAvailable { get; set; } = true;
+        public string MemoryProcessesStatus { get; set; } = string.Empty;
         public bool VramProcessesAvailable { get; set; }
         public string VramProcessesStatus { get; set; } = "等待显存数据";
         public List<ProcessInfo> TopCpuProcesses { get; set; } = new List<ProcessInfo>();
@@ -31,6 +33,8 @@ namespace SysFloat.Monitoring
     public class ProcessInfo
     {
         public int ProcessId { get; set; }
+        public int ProcessCount { get; set; } = 1;
+        public bool MemoryIsPartial { get; set; }
         public string Name { get; set; }
         public float CpuPercent { get; set; }
         public float MemoryPercent { get; set; }

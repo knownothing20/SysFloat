@@ -337,8 +337,8 @@ namespace SysFloat.UI
             }
             else
             {
-                title = "内存占用 Top 5";
-                subtitle = "按工作集占用排序";
+                title = "应用内存 Top 5";
+                subtitle = "应用合计 · 私有工作集";
                 processes = snapshot.TopMemoryProcesses;
                 emptyMessage = "暂无内存占用进程";
             }
@@ -358,6 +358,9 @@ namespace SysFloat.UI
                 unavailableMessage = string.IsNullOrWhiteSpace(status) || status == "等待显存数据"
                     ? "系统未提供进程显存数据" : status;
             }
+            else if (selectedMetric == ProcessMetric.Memory && !snapshot.MemoryProcessesAvailable)
+                unavailableMessage = string.IsNullOrWhiteSpace(snapshot.MemoryProcessesStatus)
+                    ? "系统未提供私有工作集数据" : snapshot.MemoryProcessesStatus;
 
             int listTop = bounds.Y + 46;
             if (unavailableMessage != null)
@@ -379,13 +382,15 @@ namespace SysFloat.UI
                 ProcessInfo process = processes[i];
                 int y = listTop + i * rowHeight;
                 string name = string.IsNullOrWhiteSpace(process.Name) ? "未知进程" : process.Name;
+                if (selectedMetric == ProcessMetric.Memory && process.ProcessCount > 1)
+                    name += " (" + process.ProcessCount + ")";
                 string metricText;
                 if (selectedMetric == ProcessMetric.Cpu)
                     metricText = HasSample(process.CpuPercent) ? process.CpuPercent.ToString("0.0") + "%" : "--";
                 else if (selectedMetric == ProcessMetric.Vram)
                     metricText = FormatBytes(process.VramBytes);
                 else
-                    metricText = FormatBytes(process.MemoryBytes);
+                    metricText = (process.MemoryIsPartial ? "≥ " : "") + FormatBytes(process.MemoryBytes);
 
                 float valueWidth = g.MeasureString(metricText, ProcessValueFont).Width;
                 int nameWidth = Math.Max(20, bounds.Width - (int)valueWidth - 32);

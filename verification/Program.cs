@@ -32,6 +32,7 @@ internal static class Program
             VerifyGpuUnits();
             VerifyProcessCpuTracker();
             VerifyProcessVramCounter();
+            VerifyApplicationMemory();
             RenderLayouts();
             RenderLinkedRankings();
             VerifyLiveWiring();
@@ -303,6 +304,7 @@ internal static class Program
     }
 
     private static object Field(object obj, string name) => obj.GetType().GetField(name, Hidden).GetValue(obj);
+    private static object Property(object obj, string name) => obj.GetType().GetProperty(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic).GetValue(obj);
     private static void SetProperty(object obj, string name, object value) => obj.GetType().GetProperty(name).SetValue(obj, value);
 
     private static void Pump(int milliseconds)
@@ -336,6 +338,27 @@ internal static class Program
             Pump(600);
             Check(Field(monitor, "_processTimer") != null, "visible expanded layout enables actual process scanner");
             Check(widget.SelectedProcessMetric == ProcessMetric.Memory, "expanded process ranking defaults to memory");
+            PumpUntil(() => ((MetricSnapshot)Field(widget, "_snapshot")).TopMemoryProcesses.Count > 0 &&
+                ((MetricSnapshot)Field(widget, "_snapshot")).CpuPercent >= 0, 3500,
+                "real grouped application memory reaches the visible widget");
+            var memorySnapshot = (MetricSnapshot)Field(widget, "_snapshot");
+            Check(memorySnapshot.TopMemoryProcesses.Exists(row => row.ProcessCount > 1),
+                "group process counts survive service snapshot cloning");
+            var actualSize = WidgetSizeHelper.GetSize(WidgetLayout.Expanded, 1.5f);
+            using (var bitmap = new Bitmap(actualSize.Width, actualSize.Height))
+            using (var graphics = Graphics.FromImage(bitmap))
+            {
+                graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+                graphics.ScaleTransform(1.5f, 1.5f);
+                WidgetRenderer.DrawLayout(graphics, new Rectangle(Point.Empty, WidgetSizeHelper.GetSize(WidgetLayout.Expanded, 1f)),
+                    WidgetLayout.Expanded, memorySnapshot, selectedMetric: ProcessMetric.Memory);
+                bitmap.Save(Path.Combine(Output, "Expanded-ApplicationMemory-Live.png"), ImageFormat.Png);
+            }
+            var chronological = typeof(WidgetForm).GetMethod("GetChronologicalHistory", Hidden);
+            Check(ReferenceEquals(chronological.Invoke(widget, new[] { Field(widget, "_cpuHistory") }),
+                chronological.Invoke(widget, new[] { Field(widget, "_cpuHistory") })),
+                "chart redraw reuses its chronological buffer instead of allocating each paint");
             ClickMetric(widget, 0);
             Check(widget.SelectedProcessMetric == ProcessMetric.Cpu, "actual CPU row click selects CPU ranking");
             PumpUntil(() => ((MetricSnapshot)Field(widget, "_snapshot")).RankingMetric == ProcessMetric.Cpu &&
@@ -373,6 +396,8 @@ internal static class Program
             widget.HideWidget();
             Check(Field(monitor, "_processTimer") == null && !((System.Windows.Forms.Timer)Field(widget, "_clockTimer")).Enabled,
                 "hiding stops process scan and clock redraw timer");
+            Check(!((System.Windows.Forms.Timer)Field(widget, "_topMostTimer")).Enabled,
+                "hidden widget also stops top-most timer wakeups");
             monitor.Stop();
             Check(Field(monitor, "_timer") == null, "stopping clears metric timer");
         }
@@ -422,6 +447,75 @@ internal static class Program
             previous = row.CpuPercent;
         }
         return true;
+    }
+
+    private static void VerifyApplicationMemory()
+    {
+        var assembly = typeof(MonitorService).Assembly;
+        var sampleType = assembly.GetType("SysFloat.Monitoring.ProcessMemoryProcessSample");
+        var groupType = assembly.GetType("SysFloat.Monitoring.ApplicationMemoryGrouper");
+        var fixture = Array.CreateInstance(sampleType, 9);
+        object New(int pid, int parent, string path, ulong start, bool readable, ulong bytes) =>
+            Activator.CreateInstance(sampleType, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                null, new object[] { pid, parent, Path.GetFileName(path), path, start, readable, bytes }, null);
+        string shell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe");
+        fixture.SetValue(New(1, 0, shell, 1, true, 50), 0);
+        fixture.SetValue(New(10, 1, @"C:\Apps\A\editor.exe", 10, true, 1000), 1);
+        fixture.SetValue(New(11, 10, @"C:\Apps\A\editor.exe", 11, true, 2000), 2);
+        fixture.SetValue(New(12, 11, @"C:\Tools\helper.exe", 12, true, 3000), 3);
+        fixture.SetValue(New(13, 10, @"C:\Tools\protected.exe", 13, false, 0), 4);
+        fixture.SetValue(New(20, 10, @"C:\Apps\Viewer\viewer.exe", 20, true, 500), 5);
+        fixture.SetValue(New(30, 1, @"D:\Another\editor.exe", 30, true, 700), 6);
+        fixture.SetValue(New(40, 1, @"C:\Apps\NewParent\new.exe", 90, true, 900), 7);
+        fixture.SetValue(New(41, 40, @"C:\OldChild\child.exe", 89, true, 400), 8);
+        var group = groupType.GetMethod("GroupSamples", BindingFlags.Static | BindingFlags.NonPublic);
+        var rows = (List<ProcessInfo>)group.Invoke(null, new object[] { fixture, new[] { 1, 10, 20, 30, 40 }, null });
+        var editor = rows.Find(row => row.ProcessId == 10);
+        Check(editor.MemoryBytes == 6000 && editor.ProcessCount == 4 && editor.MemoryIsPartial,
+            "application memory combines mixed executable descendants and marks unreadable member");
+        Check(rows.Exists(row => row.ProcessId == 20 && row.MemoryBytes == 500 && row.ProcessCount == 1),
+            "independent child GUI application stays separate");
+        Check(rows.Exists(row => row.ProcessId == 30 && row.MemoryBytes == 700),
+            "same executable name in another directory stays separate");
+        Check(rows.Exists(row => row.ProcessId == 41 && row.MemoryBytes == 400),
+            "reused parent PID does not absorb an older child");
+        Check(rows.Exists(row => row.ProcessId == 1 && row.MemoryBytes == 50),
+            "desktop shell does not absorb launched applications");
+
+        var readerType = assembly.GetType("SysFloat.Monitoring.ProcessMemoryReader");
+        var reader = Activator.CreateInstance(readerType, true);
+        var reference = PrivateWorkingSetReference.Read();
+        int selfPid = Process.GetCurrentProcess().Id;
+        var reading = readerType.GetMethod("Read", Hidden).Invoke(reader, new object[] { selfPid });
+        ulong actual = (ulong)Property(reading, "PrivateWorkingSetBytes");
+        Check((bool)Property(reading, "PrivateWorkingSetAvailable") && reference.ContainsKey(selfPid) &&
+            Math.Abs((double)actual - reference[selfPid]) < 4 * 1024 * 1024,
+            $"native private working set agrees with independent PDH: API={actual} PDH={reference.GetValueOrDefault(selfPid)}");
+
+        var collectorType = assembly.GetType("SysFloat.Monitoring.ProcessMemoryCollector");
+        var collector = Activator.CreateInstance(collectorType, true);
+        var collect = collectorType.GetMethod("Collect", Hidden);
+        var coldWatch = Stopwatch.StartNew();
+        var collected = collect.Invoke(collector, new object[] { null });
+        coldWatch.Stop();
+        Check((bool)Property(collected, "Available"), "live application private-memory collector is available");
+        var liveRows = (List<ProcessInfo>)Property(collected, "Processes");
+        Check(liveRows.Exists(row => row.ProcessCount > 1 && row.MemoryBytes > 0), "live memory ranking contains aggregated applications");
+        foreach (var row in liveRows)
+            Console.WriteLine($"Application memory: {row.Name} ({row.ProcessCount}) {row.MemoryBytes / 1048576.0:0.0} MiB partial={row.MemoryIsPartial}");
+        using (var current = Process.GetCurrentProcess())
+        {
+            current.Refresh();
+            int handlesBefore = current.HandleCount;
+            var hotWatch = Stopwatch.StartNew();
+            for (int i = 0; i < 5; i++) collected = collect.Invoke(collector, new object[] { null });
+            hotWatch.Stop();
+            current.Refresh();
+            Check(current.HandleCount <= handlesBefore + 4, "repeated memory collection does not leak handles");
+            Console.WriteLine($"Memory collector: cold={coldWatch.Elapsed.TotalMilliseconds:0.0}ms cachedAvg={hotWatch.Elapsed.TotalMilliseconds / 5:0.0}ms handles={handlesBefore}->{current.HandleCount}");
+        }
+        var aborted = collect.Invoke(collector, new object[] { new Func<bool>(() => false) });
+        Check((bool)Property(aborted, "Aborted"), "hidden/switched memory collection cancels before native work");
     }
 
     private static void VerifyTrayWiring()

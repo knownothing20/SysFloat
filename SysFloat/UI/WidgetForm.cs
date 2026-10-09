@@ -51,6 +51,13 @@ namespace SysFloat.UI
         private int _activeMetric = -1;
         private volatile bool _disposed;
         private int _activeAlertMetrics;
+        private LayeredWidgetSurface _layeredSurface;
+        private int _layeredRenderQueued;
+        private int _layeredRenderGeneration;
+
+        private const int WsExLayered = 0x00080000;
+        private const uint SwpNoZOrder = 0x0004;
+        private const uint SwpFrameChanged = 0x0020;
 
         public event Action CloseClicked;
         public event Action<WidgetLayout> LayoutChanged;
@@ -98,6 +105,8 @@ namespace SysFloat.UI
             {
                 var cp = base.CreateParams;
                 cp.ExStyle |= NativeMethods.WS_EX_TOPMOST | NativeMethods.WS_EX_TOOLWINDOW;
+                if (UsesLayeredOpacity(_settings?.Opacity ?? WidgetOpacity.Opaque))
+                    cp.ExStyle |= WsExLayered;
                 return cp;
             }
         }
@@ -142,15 +151,15 @@ namespace SysFloat.UI
 
             _contextMenu.Items.Add(new ToolStripSeparator());
 
-            var op100 = new ToolStripMenuItem("不透明");
+            var op100 = new ToolStripMenuItem("背景不透明");
             op100.Click += (s, e) => SetOpacity(WidgetOpacity.Opaque);
             _contextMenu.Items.Add(op100);
 
-            var op75 = new ToolStripMenuItem("75% 透明");
+            var op75 = new ToolStripMenuItem("背景 75%");
             op75.Click += (s, e) => SetOpacity(WidgetOpacity.Percent75);
             _contextMenu.Items.Add(op75);
 
-            var op50 = new ToolStripMenuItem("50% 透明");
+            var op50 = new ToolStripMenuItem("背景 50%");
             op50.Click += (s, e) => SetOpacity(WidgetOpacity.Percent50);
             _contextMenu.Items.Add(op50);
 
@@ -178,7 +187,7 @@ namespace SysFloat.UI
         {
             string[] layoutTexts = { "横版", "竖版", "展开版" };
             WidgetLayout[] layouts = { WidgetLayout.Horizontal, WidgetLayout.Vertical, WidgetLayout.Expanded };
-            string[] opacityTexts = { "不透明", "75% 透明", "50% 透明" };
+            string[] opacityTexts = { "背景不透明", "背景 75%", "背景 50%" };
             WidgetOpacity[] opacities = { WidgetOpacity.Opaque, WidgetOpacity.Percent75, WidgetOpacity.Percent50 };
 
             for (int i = 0; i < _contextMenu.Items.Count; i++)
@@ -207,15 +216,68 @@ namespace SysFloat.UI
 
         public void SetOpacity(WidgetOpacity opacity)
         {
+            if (!Enum.IsDefined(typeof(WidgetOpacity), opacity)) opacity = WidgetOpacity.Opaque;
             _settings.Opacity = opacity;
-            Opacity = (double)opacity / 100.0;
+            ApplyOpacity();
             _settingsStore.Save(_settings);
             UpdateMenuChecks();
         }
 
         public void ApplyOpacity()
         {
-            Opacity = (double)_settings.Opacity / 100.0;
+            bool useLayered = UsesLayeredOpacity(_settings?.Opacity ?? WidgetOpacity.Opaque);
+            if (!IsHandleCreated)
+            {
+                if (!useLayered) DisposeLayeredSurface();
+                return;
+            }
+
+            int exStyle = NativeMethods.GetWindowLong(Handle, NativeMethods.GWL_EXSTYLE);
+            bool hasLayeredStyle = (exStyle & WsExLayered) != 0;
+            if (hasLayeredStyle != useLayered)
+            {
+                int updatedStyle = useLayered ? exStyle | WsExLayered : exStyle & ~WsExLayered;
+                NativeMethods.SetWindowLong(Handle, NativeMethods.GWL_EXSTYLE, updatedStyle);
+                NativeMethods.SetWindowPos(Handle, IntPtr.Zero, 0, 0, 0, 0,
+                    NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE |
+                    SwpNoZOrder | SwpFrameChanged);
+            }
+
+            if (useLayered)
+            {
+                if (Visible) RenderLayeredSurface();
+            }
+            else
+            {
+                CancelQueuedLayeredRender();
+                DisposeLayeredSurface();
+                Invalidate();
+            }
+        }
+
+        private static bool UsesLayeredOpacity(WidgetOpacity opacity) => opacity == WidgetOpacity.Percent75 || opacity == WidgetOpacity.Percent50;
+
+        private int GetBackgroundAlpha()
+        {
+            switch (_settings?.Opacity ?? WidgetOpacity.Opaque)
+            {
+                case WidgetOpacity.Percent75: return 191;
+                case WidgetOpacity.Percent50: return 128;
+                default: return 255;
+            }
+        }
+
+        private void DisposeLayeredSurface()
+        {
+            var surface = _layeredSurface;
+            _layeredSurface = null;
+            surface?.Dispose();
+        }
+
+        private void CancelQueuedLayeredRender()
+        {
+            Interlocked.Increment(ref _layeredRenderGeneration);
+            Interlocked.Exchange(ref _layeredRenderQueued, 0);
         }
 
         public void ApplyLayout(WidgetLayout layout, bool save = true)
@@ -347,6 +409,7 @@ namespace SysFloat.UI
         {
             base.OnShown(e);
             ForceTopMost();
+            if (UsesLayeredOpacity(_settings?.Opacity ?? WidgetOpacity.Opaque)) RenderLayeredSurface();
         }
 
         protected override void OnVisibleChanged(EventArgs e)
@@ -364,8 +427,17 @@ namespace SysFloat.UI
                 _clockTimer?.Stop();
                 _topMostTimer?.Stop();
                 HideMetricToolTip();
+                CancelQueuedLayeredRender();
+                DisposeLayeredSurface();
             }
             ApplyMonitoringSettings();
+            if (Visible && UsesLayeredOpacity(_settings?.Opacity ?? WidgetOpacity.Opaque)) QueueLayeredRender();
+        }
+
+        protected override void OnSizeChanged(EventArgs e)
+        {
+            base.OnSizeChanged(e);
+            if (UsesLayeredOpacity(_settings?.Opacity ?? WidgetOpacity.Opaque)) QueueLayeredRender();
         }
 
         protected override void OnDpiChanged(DpiChangedEventArgs e)
@@ -506,35 +578,114 @@ namespace SysFloat.UI
             return result;
         }
 
+        protected override void OnInvalidated(InvalidateEventArgs e)
+        {
+            base.OnInvalidated(e);
+            QueueLayeredRender();
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            if (UsesLayeredOpacity(_settings?.Opacity ?? WidgetOpacity.Opaque)) return;
+            base.OnPaintBackground(e);
+        }
+
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);
 
-            var g = e.Graphics;
+            if (UsesLayeredOpacity(_settings?.Opacity ?? WidgetOpacity.Opaque))
+                return;
+
+            DrawWidget(e.Graphics, ClientSize.Width, ClientSize.Height, false);
+        }
+
+        private void DrawWidget(Graphics g, int pixelWidth, int pixelHeight, bool layered)
+        {
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            g.TextRenderingHint = layered
+                ? System.Drawing.Text.TextRenderingHint.AntiAliasGridFit
+                : System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
             g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
 
             float scale = Math.Max(1, DeviceDpi) / 96f;
             g.ScaleTransform(scale, scale);
 
-            var bounds = new Rectangle(0, 0, (int)Math.Ceiling(Width / scale), (int)Math.Ceiling(Height / scale));
+            var bounds = new Rectangle(0, 0, (int)Math.Ceiling(pixelWidth / scale), (int)Math.Ceiling(pixelHeight / scale));
             int threshold = _settings.HighLoadAlertsEnabled ? _settings.HighLoadThresholdPercent : int.MaxValue;
+            int backgroundAlpha = GetBackgroundAlpha();
 
             switch (_currentLayout)
             {
                 case WidgetLayout.Horizontal:
-                    WidgetRenderer.DrawHorizontal(g, bounds, _snapshot, threshold, _settings.HighLoadAlertsEnabled, _activeAlertMetrics);
+                    WidgetRenderer.DrawHorizontal(g, bounds, _snapshot, threshold, _settings.HighLoadAlertsEnabled, _activeAlertMetrics, backgroundAlpha);
                     break;
                 case WidgetLayout.Vertical:
-                    WidgetRenderer.DrawVertical(g, bounds, _snapshot, threshold, _settings.HighLoadAlertsEnabled, _activeAlertMetrics);
+                    WidgetRenderer.DrawVertical(g, bounds, _snapshot, threshold, _settings.HighLoadAlertsEnabled, _activeAlertMetrics, backgroundAlpha);
                     break;
                 case WidgetLayout.Expanded:
                     WidgetRenderer.DrawExpanded(g, bounds, _snapshot,
                         GetChronologicalHistory(_cpuHistory), GetChronologicalHistory(_ramHistory), GetChronologicalHistory(_vramHistory), _isCloseHover,
-                        threshold, _settings.HighLoadAlertsEnabled, _activeAlertMetrics, _selectedProcessMetric);
+                        threshold, _settings.HighLoadAlertsEnabled, _activeAlertMetrics, _selectedProcessMetric, backgroundAlpha);
                     _closeButtonRect = ScaleRect(WidgetRenderer.GetCloseButtonRect(bounds, WidgetLayout.Expanded), scale);
                     break;
+            }
+        }
+
+        private void QueueLayeredRender()
+        {
+            if (_disposed || IsDisposed || Disposing || !IsHandleCreated || !Visible ||
+                !UsesLayeredOpacity(_settings?.Opacity ?? WidgetOpacity.Opaque)) return;
+            if (Interlocked.CompareExchange(ref _layeredRenderQueued, 1, 0) != 0) return;
+            int generation = Volatile.Read(ref _layeredRenderGeneration);
+
+            try
+            {
+                BeginInvoke((MethodInvoker)(() =>
+                {
+                    if (generation != Volatile.Read(ref _layeredRenderGeneration)) return;
+                    Interlocked.Exchange(ref _layeredRenderQueued, 0);
+                    if (!_disposed && !IsDisposed && !Disposing && IsHandleCreated && Visible &&
+                        UsesLayeredOpacity(_settings?.Opacity ?? WidgetOpacity.Opaque))
+                        RenderLayeredSurface();
+                }));
+            }
+            catch (InvalidOperationException)
+            {
+                if (generation == Volatile.Read(ref _layeredRenderGeneration))
+                    Interlocked.Exchange(ref _layeredRenderQueued, 0);
+            }
+        }
+
+        private void RenderLayeredSurface()
+        {
+            if (_disposed || IsDisposed || Disposing || !IsHandleCreated || !Visible ||
+                !UsesLayeredOpacity(_settings?.Opacity ?? WidgetOpacity.Opaque)) return;
+
+            int width = ClientSize.Width;
+            int height = ClientSize.Height;
+            if (width <= 0 || height <= 0) return;
+
+            try
+            {
+                if (_layeredSurface == null || _layeredSurface.Width != width || _layeredSurface.Height != height)
+                {
+                    DisposeLayeredSurface();
+                    _layeredSurface = new LayeredWidgetSurface(width, height);
+                }
+
+                Graphics g = _layeredSurface.DrawingGraphics;
+                g.ResetTransform();
+                g.ResetClip();
+                g.Clear(Color.Transparent);
+                DrawWidget(g, width, height, true);
+                if (!_layeredSurface.Present(Handle, Location))
+                    System.Diagnostics.Debug.WriteLine("UpdateLayeredWindow failed: " + Marshal.GetLastWin32Error());
+            }
+            catch (Exception ex) when (ex is ArgumentException || ex is ExternalException ||
+                ex is InvalidOperationException || ex is OutOfMemoryException || ex is System.ComponentModel.Win32Exception)
+            {
+                System.Diagnostics.Debug.WriteLine("Layered widget render failed: " + ex.Message);
             }
         }
 
@@ -721,9 +872,10 @@ namespace SysFloat.UI
         protected override void OnMouseLeave(EventArgs e)
         {
             HideMetricToolTip();
+            bool wasCloseHover = _isCloseHover;
             _isCloseHover = false;
             if (!_isLeftPressActive) Cursor = Cursors.Default;
-            Invalidate();
+            if (wasCloseHover) Invalidate();
             base.OnMouseLeave(e);
         }
 
@@ -740,6 +892,13 @@ namespace SysFloat.UI
                 if (post) _snapshotDispatchQueued = true;
             }
             if (post) PostSnapshotDispatch();
+            if (Visible && UsesLayeredOpacity(_settings?.Opacity ?? WidgetOpacity.Opaque)) QueueLayeredRender();
+        }
+
+        protected override void OnHandleDestroyed(EventArgs e)
+        {
+            CancelQueuedLayeredRender();
+            base.OnHandleDestroyed(e);
         }
 
         protected override void Dispose(bool disposing)
@@ -754,6 +913,7 @@ namespace SysFloat.UI
                 _topMostTimer?.Dispose();
                 _metricToolTip?.Dispose();
                 _contextMenu?.Dispose();
+                DisposeLayeredSurface();
             }
             base.Dispose(disposing);
         }

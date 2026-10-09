@@ -14,6 +14,8 @@ namespace SysFloat.UI
         private static readonly Color Text = Color.FromArgb(244, 246, 250);
         private static readonly Color Muted = Color.FromArgb(150, 159, 176);
         private static readonly Color Dim = Color.FromArgb(110, 119, 136);
+        private static readonly Color LayeredMuted = Color.FromArgb(229, 233, 240);
+        private static readonly Color LayeredDim = Color.FromArgb(211, 219, 231);
         private static readonly Color Cpu = Color.FromArgb(116, 186, 255);
         private static readonly Color Ram = Color.FromArgb(194, 139, 255);
         private static readonly Color Vram = Color.FromArgb(127, 219, 163);
@@ -27,9 +29,10 @@ namespace SysFloat.UI
         private static readonly Font ProcessFont = CreateLogicalFont(8.2f, FontStyle.Regular);
         private static readonly Font ProcessValueFont = CreateLogicalFont(8.2f, FontStyle.Bold);
 
-        public static void DrawHorizontal(Graphics g, Rectangle bounds, MetricSnapshot snapshot, int alertThreshold = 90, bool alertsEnabled = true, int activeAlertMetrics = 7)
+        public static void DrawHorizontal(Graphics g, Rectangle bounds, MetricSnapshot snapshot, int alertThreshold = 90, bool alertsEnabled = true, int activeAlertMetrics = 7, int backgroundAlpha = 255)
         {
-            DrawPanel(g, bounds, 14);
+            DrawPanel(g, bounds, 14, backgroundAlpha);
+            Color muted = GetMutedColor(backgroundAlpha);
             int clockWidth = 124;
             int metricsWidth = bounds.Width - clockWidth;
             int sectionWidth = metricsWidth / 3;
@@ -39,17 +42,18 @@ namespace SysFloat.UI
             for (int i = 0; i < 3; i++)
             {
                 var area = new Rectangle(bounds.X + i * sectionWidth, bounds.Y, sectionWidth, bounds.Height);
-                DrawCompactMetric(g, area, labels[i], values[i], colors[i], alertThreshold, alertsEnabled && (activeAlertMetrics & (1 << i)) != 0);
+                DrawCompactMetric(g, area, labels[i], values[i], colors[i], alertThreshold, alertsEnabled && (activeAlertMetrics & (1 << i)) != 0, muted);
                 if (i > 0) DrawDivider(g, area.X, bounds.Y + 16, bounds.Y + bounds.Height - 16);
             }
             int clockX = bounds.Right - clockWidth;
             DrawDivider(g, clockX, bounds.Y + 14, bounds.Bottom - 14);
-            DrawClock(g, new Rectangle(clockX + 7, bounds.Y + 3, clockWidth - 12, bounds.Height - 6), false);
+            DrawClock(g, new Rectangle(clockX + 7, bounds.Y + 3, clockWidth - 12, bounds.Height - 6), false, muted);
         }
 
-        public static void DrawVertical(Graphics g, Rectangle bounds, MetricSnapshot snapshot, int alertThreshold = 90, bool alertsEnabled = true, int activeAlertMetrics = 7)
+        public static void DrawVertical(Graphics g, Rectangle bounds, MetricSnapshot snapshot, int alertThreshold = 90, bool alertsEnabled = true, int activeAlertMetrics = 7, int backgroundAlpha = 255)
         {
-            DrawPanel(g, bounds, 14);
+            DrawPanel(g, bounds, 14, backgroundAlpha);
+            Color muted = GetMutedColor(backgroundAlpha);
             int clockHeight = 84;
             int metricAreaHeight = bounds.Height - clockHeight;
             int rowHeight = metricAreaHeight / 3;
@@ -59,21 +63,23 @@ namespace SysFloat.UI
             for (int i = 0; i < 3; i++)
             {
                 var row = new Rectangle(bounds.X + 5, bounds.Y + i * rowHeight + 2, bounds.Width - 10, rowHeight - 4);
-                DrawVerticalMetric(g, row, labels[i], values[i], colors[i], alertThreshold, alertsEnabled && (activeAlertMetrics & (1 << i)) != 0);
+                DrawVerticalMetric(g, row, labels[i], values[i], colors[i], alertThreshold, alertsEnabled && (activeAlertMetrics & (1 << i)) != 0, muted);
             }
             int clockY = bounds.Bottom - clockHeight;
             DrawHorizontalDivider(g, bounds.X + 14, clockY, bounds.Right - 14);
-            DrawClock(g, new Rectangle(bounds.X + 7, clockY + 2, bounds.Width - 14, clockHeight - 5), true);
+            DrawClock(g, new Rectangle(bounds.X + 7, clockY + 2, bounds.Width - 14, clockHeight - 5), true, muted);
         }
 
         public static void DrawExpanded(Graphics g, Rectangle bounds, MetricSnapshot snapshot,
             float[] cpuHistory, float[] ramHistory, float[] vramHistory, bool isCloseHover,
             int alertThreshold = 90, bool alertsEnabled = true, int activeAlertMetrics = 7,
-            ProcessMetric selectedMetric = ProcessMetric.Memory)
+            ProcessMetric selectedMetric = ProcessMetric.Memory, int backgroundAlpha = 255)
         {
             if (!Enum.IsDefined(typeof(ProcessMetric), selectedMetric)) selectedMetric = ProcessMetric.Memory;
-            DrawPanel(g, bounds, 14);
-            DrawExpandedHeader(g, bounds, isCloseHover);
+            DrawPanel(g, bounds, 14, backgroundAlpha);
+            Color muted = GetMutedColor(backgroundAlpha);
+            Color dim = GetDimColor(backgroundAlpha);
+            DrawExpandedHeader(g, bounds, isCloseHover, muted);
 
             int leftWidth = (int)Math.Round(bounds.Width * 0.55f);
             int contentTop = bounds.Y + 42;
@@ -89,14 +95,14 @@ namespace SysFloat.UI
                 var rowBounds = new Rectangle(bounds.X + 7, y + 1, leftWidth - 18, rowHeight - 2);
                 if (i == (int)selectedMetric) DrawSelectedMetric(g, rowBounds, colors[i]);
                 DrawExpandedMetric(g, new Rectangle(bounds.X + 13, y + 1, leftWidth - 22, rowHeight - 2),
-                    labels[i], values[i], colors[i], histories[i], snapshot, i, alertThreshold, alertsEnabled && (activeAlertMetrics & (1 << i)) != 0);
+                    labels[i], values[i], colors[i], histories[i], snapshot, i, alertThreshold, alertsEnabled && (activeAlertMetrics & (1 << i)) != 0, muted, dim);
                 if (i < 2) DrawHorizontalDivider(g, bounds.X + 13, y + rowHeight, bounds.X + leftWidth - 10);
             }
 
             int rightX = bounds.X + leftWidth;
             DrawDivider(g, rightX, contentTop + 4, bounds.Bottom - 12);
             int activeY = contentTop + ((int)selectedMetric * rowHeight) + rowHeight / 2;
-            DrawProcessList(g, new Rectangle(rightX + 11, contentTop + 2, bounds.Right - rightX - 20, contentHeight - 4), snapshot, selectedMetric);
+            DrawProcessList(g, new Rectangle(rightX + 11, contentTop + 2, bounds.Right - rightX - 20, contentHeight - 4), snapshot, selectedMetric, muted, dim);
             DrawSelectionBridge(g, rightX, activeY, MetricColor(selectedMetric));
         }
 
@@ -126,20 +132,20 @@ namespace SysFloat.UI
         public static void DrawLayout(Graphics g, Rectangle bounds, WidgetLayout layout, MetricSnapshot snapshot,
             float[] cpuHistory = null, float[] ramHistory = null, float[] vramHistory = null,
             bool isCloseHover = false, int alertThreshold = 90, bool alertsEnabled = true,
-            ProcessMetric selectedMetric = ProcessMetric.Memory)
+            ProcessMetric selectedMetric = ProcessMetric.Memory, int backgroundAlpha = 255)
         {
             snapshot = snapshot ?? new MetricSnapshot();
             switch (layout)
             {
                 case WidgetLayout.Vertical:
-                    DrawVertical(g, bounds, snapshot, alertThreshold, alertsEnabled);
+                    DrawVertical(g, bounds, snapshot, alertThreshold, alertsEnabled, 7, backgroundAlpha);
                     break;
                 case WidgetLayout.Expanded:
                     DrawExpanded(g, bounds, snapshot, cpuHistory ?? CreateEmptyHistory(), ramHistory ?? CreateEmptyHistory(),
-                        vramHistory ?? CreateEmptyHistory(), isCloseHover, alertThreshold, alertsEnabled, 7, selectedMetric);
+                        vramHistory ?? CreateEmptyHistory(), isCloseHover, alertThreshold, alertsEnabled, 7, selectedMetric, backgroundAlpha);
                     break;
                 default:
-                    DrawHorizontal(g, bounds, snapshot, alertThreshold, alertsEnabled);
+                    DrawHorizontal(g, bounds, snapshot, alertThreshold, alertsEnabled, 7, backgroundAlpha);
                     break;
             }
         }
@@ -151,44 +157,72 @@ namespace SysFloat.UI
             return values;
         }
 
-        private static void DrawPanel(Graphics g, Rectangle bounds, int radius)
+        private static void DrawPanel(Graphics g, Rectangle bounds, int radius, int backgroundAlpha = 255)
         {
+            backgroundAlpha = Math.Max(0, Math.Min(255, backgroundAlpha));
             using (var path = CreateRoundedRectPath(bounds, radius))
-            using (var fill = new SolidBrush(Background))
-            using (var outline = new Pen(Border, 1f))
             {
-                g.FillPath(fill, path);
-                g.DrawPath(outline, path);
+                if (backgroundAlpha == 255)
+                {
+                    using (var fill = new SolidBrush(Background))
+                    using (var outline = new Pen(Border, 1f))
+                    {
+                        g.FillPath(fill, path);
+                        g.DrawPath(outline, path);
+                    }
+                    return;
+                }
+
+                var top = Color.FromArgb(backgroundAlpha, 27, 39, 59);
+                var bottom = Color.FromArgb(backgroundAlpha, 16, 23, 36);
+                using (var fill = new LinearGradientBrush(bounds, top, bottom, LinearGradientMode.Vertical))
+                using (var outline = new Pen(Color.FromArgb(Math.Min(255, backgroundAlpha + 52), 91, 119, 154), 1f))
+                {
+                    g.FillPath(fill, path);
+                    g.DrawPath(outline, path);
+                }
+
+                using (var highlight = new Pen(Color.FromArgb(Math.Min(255, backgroundAlpha + 36), 130, 157, 190), 1f))
+                {
+                    // A restrained edge highlight makes the translucent surface read as glass
+                    // without adding blur, animation, or per-frame effects.
+                    g.DrawArc(highlight, bounds.X + 2, bounds.Y + 1, Math.Max(1, radius * 2 - 4), Math.Max(1, radius * 2 - 4), 180, 90);
+                    g.DrawLine(highlight, bounds.X + radius, bounds.Y + 1, bounds.Right - radius, bounds.Y + 1);
+                }
             }
         }
+
+        private static Color GetMutedColor(int backgroundAlpha) => backgroundAlpha < 255 ? LayeredMuted : Muted;
+
+        private static Color GetDimColor(int backgroundAlpha) => backgroundAlpha < 255 ? LayeredDim : Dim;
 
         private static Font CreateLogicalFont(float pointSize, FontStyle style)
         {
             return new Font("Segoe UI", pointSize * 96f / 72f, style, GraphicsUnit.Pixel);
         }
 
-        private static void DrawCompactMetric(Graphics g, Rectangle area, string label, float value, Color color, int threshold, bool alertsEnabled)
+        private static void DrawCompactMetric(Graphics g, Rectangle area, string label, float value, Color color, int threshold, bool alertsEnabled, Color muted)
         {
             string valueText = HasSample(value) ? string.Format("{0:0}%", value) : "--";
             var labelSize = g.MeasureString(label, LabelFont);
             var valueSize = g.MeasureString(valueText, ValueFont);
-            using (var brush = new SolidBrush(Muted)) g.DrawString(label, LabelFont, brush, area.X + (area.Width - labelSize.Width) / 2f, area.Y + 5);
+            using (var brush = new SolidBrush(muted)) g.DrawString(label, LabelFont, brush, area.X + (area.Width - labelSize.Width) / 2f, area.Y + 5);
             using (var brush = new SolidBrush(ValueColor(value, color, threshold, alertsEnabled))) g.DrawString(valueText, ValueFont, brush, area.X + (area.Width - valueSize.Width) / 2f, area.Y + 20);
             DrawUsageBar(g, area.X + area.Width * 0.25f, area.Bottom - 7, area.Width * 0.5f, value, color);
         }
 
-        private static void DrawVerticalMetric(Graphics g, Rectangle area, string label, float value, Color color, int threshold, bool alertsEnabled)
+        private static void DrawVerticalMetric(Graphics g, Rectangle area, string label, float value, Color color, int threshold, bool alertsEnabled, Color muted)
         {
             string valueText = HasSample(value) ? string.Format("{0:0}%", value) : "--";
             var ls = g.MeasureString(label, LabelFont);
             var vs = g.MeasureString(valueText, ValueFont);
             float cx = area.X + area.Width / 2f;
-            using (var brush = new SolidBrush(Muted)) g.DrawString(label, LabelFont, brush, cx - ls.Width / 2f, area.Y + 8);
+            using (var brush = new SolidBrush(muted)) g.DrawString(label, LabelFont, brush, cx - ls.Width / 2f, area.Y + 8);
             using (var brush = new SolidBrush(ValueColor(value, color, threshold, alertsEnabled))) g.DrawString(valueText, ValueFont, brush, cx - vs.Width / 2f, area.Y + 25);
             DrawUsageBar(g, area.X + 4, area.Bottom - 10, area.Width - 8, value, color);
         }
 
-        private static void DrawClock(Graphics g, Rectangle area, bool vertical)
+        private static void DrawClock(Graphics g, Rectangle area, bool vertical, Color muted)
         {
             DateTime utc = DateTime.UtcNow;
             DateTime local = PacificClock.GetPacificTime(utc);
@@ -201,20 +235,20 @@ namespace SysFloat.UI
                 using (var brush = new SolidBrush(Text)) g.DrawString(time, ValueFont, brush, area.X + (area.Width - ts.Width) / 2f, area.Y + 4);
                 string label = "太平洋";
                 var ls = g.MeasureString(label, ClockSmallFont);
-                using (var brush = new SolidBrush(Muted)) g.DrawString(label, ClockSmallFont, brush, area.X + (area.Width - ls.Width) / 2f, area.Y + 39);
+                using (var brush = new SolidBrush(muted)) g.DrawString(label, ClockSmallFont, brush, area.X + (area.Width - ls.Width) / 2f, area.Y + 39);
                 string subtitle = zone + "  " + date;
                 var ss = g.MeasureString(subtitle, ClockSmallFont);
-                using (var brush = new SolidBrush(Muted)) g.DrawString(subtitle, ClockSmallFont, brush, area.X + (area.Width - ss.Width) / 2f, area.Y + 56);
+                using (var brush = new SolidBrush(muted)) g.DrawString(subtitle, ClockSmallFont, brush, area.X + (area.Width - ss.Width) / 2f, area.Y + 56);
             }
             else
             {
                 using (var brush = new SolidBrush(Text)) g.DrawString(time, ClockFont, brush, area.X, area.Y + 1);
                 string subtitle = "太平洋  " + zone + "  " + date;
-                using (var brush = new SolidBrush(Muted)) g.DrawString(subtitle, ClockSmallFont, brush, area.X + 1, area.Bottom - 13);
+                using (var brush = new SolidBrush(muted)) g.DrawString(subtitle, ClockSmallFont, brush, area.X + 1, area.Bottom - 13);
             }
         }
 
-        private static void DrawExpandedHeader(Graphics g, Rectangle bounds, bool closeHover)
+        private static void DrawExpandedHeader(Graphics g, Rectangle bounds, bool closeHover, Color muted)
         {
             using (var brush = new SolidBrush(Text)) g.DrawString("SysFloat", TitleFont, brush, bounds.X + 14, bounds.Y + 10);
             DateTime utc = DateTime.UtcNow;
@@ -229,10 +263,10 @@ namespace SysFloat.UI
             float totalWidth = locationWidth + gap + timeWidth + gap + dateWidth;
             float startX = bounds.Right - 46 - totalWidth;
             float baseline = bounds.Y + 30;
-            using (var brush = new SolidBrush(Muted)) g.DrawString(location, DetailFont, brush, startX, baseline - DetailFont.Height);
+            using (var brush = new SolidBrush(muted)) g.DrawString(location, DetailFont, brush, startX, baseline - DetailFont.Height);
             using (var brush = new SolidBrush(Text)) g.DrawString(time, ClockFont, brush, startX + locationWidth + gap, baseline - ClockFont.Height);
-            using (var brush = new SolidBrush(Muted)) g.DrawString(date, DetailFont, brush, startX + locationWidth + gap + timeWidth + gap, baseline - DetailFont.Height);
-            Color close = closeHover ? Color.FromArgb(255, 110, 110) : Muted;
+            using (var brush = new SolidBrush(muted)) g.DrawString(date, DetailFont, brush, startX + locationWidth + gap + timeWidth + gap, baseline - DetailFont.Height);
+            Color close = closeHover ? Color.FromArgb(255, 110, 110) : muted;
             using (var pen = new Pen(close, 1.6f))
             {
                 int x = bounds.Right - 25, y = bounds.Y + 14;
@@ -243,13 +277,13 @@ namespace SysFloat.UI
         }
 
         private static void DrawExpandedMetric(Graphics g, Rectangle area, string label, float value, Color color,
-            float[] history, MetricSnapshot snapshot, int index, int threshold, bool alertsEnabled)
+            float[] history, MetricSnapshot snapshot, int index, int threshold, bool alertsEnabled, Color muted, Color dim)
         {
-            using (var brush = new SolidBrush(Muted)) g.DrawString(label, LabelFont, brush, area.X, area.Y + 2);
+            using (var brush = new SolidBrush(muted)) g.DrawString(label, LabelFont, brush, area.X, area.Y + 2);
             string valueText = HasSample(value) ? string.Format("{0:0}%", value) : "N/A";
             using (var brush = new SolidBrush(ValueColor(value, color, threshold, alertsEnabled))) g.DrawString(valueText, ValueFont, brush, area.X, area.Y + 17);
             string detail = GetDetailText(snapshot, index, history);
-            using (var brush = new SolidBrush(Dim)) g.DrawString(detail, DetailFont, brush, area.X + 54, area.Y + 23);
+            using (var brush = new SolidBrush(dim)) g.DrawString(detail, DetailFont, brush, area.X + 54, area.Y + 23);
             int chartY = area.Y + 49;
             int chartHeight = Math.Max(8, area.Bottom - chartY - 5);
             DrawSparkline(g, new Rectangle(area.X, chartY, area.Width, chartHeight), history, color);
@@ -306,7 +340,7 @@ namespace SysFloat.UI
             }
         }
 
-        private static void DrawProcessList(Graphics g, Rectangle bounds, MetricSnapshot snapshot, ProcessMetric selectedMetric)
+        private static void DrawProcessList(Graphics g, Rectangle bounds, MetricSnapshot snapshot, ProcessMetric selectedMetric, Color muted, Color dim)
         {
             Color accent = MetricColor(selectedMetric);
             using (var path = CreateRoundedRectPath(bounds, 10))
@@ -344,7 +378,7 @@ namespace SysFloat.UI
             }
 
             using (var brush = new SolidBrush(accent)) g.DrawString(title, LabelFont, brush, bounds.X + 10, bounds.Y + 7);
-            using (var brush = new SolidBrush(Muted)) g.DrawString(subtitle, DetailFont, brush, bounds.X + 10, bounds.Y + 23);
+            using (var brush = new SolidBrush(muted)) g.DrawString(subtitle, DetailFont, brush, bounds.X + 10, bounds.Y + 23);
             using (var pen = new Pen(Color.FromArgb(100, accent), 1f)) g.DrawLine(pen, bounds.X + 10, bounds.Y + 39, bounds.Right - 10, bounds.Y + 39);
 
             string unavailableMessage = null;
@@ -366,12 +400,12 @@ namespace SysFloat.UI
             if (unavailableMessage != null)
             {
                 string visibleMessage = Ellipsize(g, unavailableMessage, ProcessFont, bounds.Width - 24);
-                using (var brush = new SolidBrush(Dim)) g.DrawString(visibleMessage, ProcessFont, brush, bounds.X + 10, listTop + 8);
+                using (var brush = new SolidBrush(dim)) g.DrawString(visibleMessage, ProcessFont, brush, bounds.X + 10, listTop + 8);
                 return;
             }
             if (processes == null || processes.Count == 0)
             {
-                using (var brush = new SolidBrush(Dim)) g.DrawString(emptyMessage, ProcessFont, brush, bounds.X + 10, listTop + 8);
+                using (var brush = new SolidBrush(dim)) g.DrawString(emptyMessage, ProcessFont, brush, bounds.X + 10, listTop + 8);
                 return;
             }
 
@@ -395,9 +429,9 @@ namespace SysFloat.UI
                 float valueWidth = g.MeasureString(metricText, ProcessValueFont).Width;
                 int nameWidth = Math.Max(20, bounds.Width - (int)valueWidth - 32);
                 name = Ellipsize(g, name, ProcessFont, nameWidth);
-                using (var brush = new SolidBrush(i == 0 ? Text : Muted))
+                using (var brush = new SolidBrush(i == 0 ? Text : muted))
                     g.DrawString(name, ProcessFont, brush, bounds.X + 10, y + 5);
-                using (var brush = new SolidBrush(i == 0 ? accent : Muted))
+                using (var brush = new SolidBrush(i == 0 ? accent : muted))
                     g.DrawString(metricText, ProcessValueFont, brush, bounds.Right - 10 - valueWidth, y + 5);
                 if (i < count - 1)
                 {

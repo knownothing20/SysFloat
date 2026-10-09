@@ -145,15 +145,15 @@ namespace SysFloat
 
             menu.Items.Add(new ToolStripSeparator());
 
-            var op100 = new ToolStripMenuItem("不透明");
+            var op100 = new ToolStripMenuItem("背景不透明");
             op100.Click += (s, e) => { _widgetForm.SetOpacity(WidgetOpacity.Opaque); UpdateTrayMenuChecks(menu); };
             menu.Items.Add(op100);
 
-            var op75 = new ToolStripMenuItem("75% 透明");
+            var op75 = new ToolStripMenuItem("背景 75%");
             op75.Click += (s, e) => { _widgetForm.SetOpacity(WidgetOpacity.Percent75); UpdateTrayMenuChecks(menu); };
             menu.Items.Add(op75);
 
-            var op50 = new ToolStripMenuItem("50% 透明");
+            var op50 = new ToolStripMenuItem("背景 50%");
             op50.Click += (s, e) => { _widgetForm.SetOpacity(WidgetOpacity.Percent50); UpdateTrayMenuChecks(menu); };
             menu.Items.Add(op50);
 
@@ -195,11 +195,11 @@ namespace SysFloat
                         item.Checked = _settings.AlwaysOnTop;
                     else if (item.Text == "锁定位置")
                         item.Checked = _settings.Locked;
-                    else if (item.Text == "不透明")
+                    else if (item.Text == "背景不透明")
                         item.Checked = _settings.Opacity == WidgetOpacity.Opaque;
-                    else if (item.Text == "75% 透明")
+                    else if (item.Text == "背景 75%")
                         item.Checked = _settings.Opacity == WidgetOpacity.Percent75;
-                    else if (item.Text == "50% 透明")
+                    else if (item.Text == "背景 50%")
                         item.Checked = _settings.Opacity == WidgetOpacity.Percent50;
                 }
             }

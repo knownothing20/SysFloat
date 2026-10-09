@@ -5,6 +5,7 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
 using SysFloat.Configuration;
@@ -35,6 +36,8 @@ internal static class Program
             VerifyApplicationMemory();
             RenderLayouts();
             RenderLinkedRankings();
+            VerifyBackgroundTransparency();
+            VerifyNativeTransparency();
             VerifyLiveWiring();
             VerifyTrayWiring();
             Console.WriteLine($"PASS {_passed} checks. Evidence: {Output}");
@@ -516,6 +519,112 @@ internal static class Program
         }
         var aborted = collect.Invoke(collector, new object[] { new Func<bool>(() => false) });
         Check((bool)Property(aborted, "Aborted"), "hidden/switched memory collection cancels before native work");
+    }
+
+    private static void VerifyBackgroundTransparency()
+    {
+        foreach (WidgetLayout layout in Enum.GetValues(typeof(WidgetLayout)))
+        {
+            foreach (byte alpha in new byte[] { 191, 128 })
+            {
+                var size = WidgetSizeHelper.GetSize(layout, 1f);
+                using (var bitmap = new Bitmap(size.Width, size.Height, PixelFormat.Format32bppPArgb))
+                using (var graphics = Graphics.FromImage(bitmap))
+                {
+                    graphics.Clear(Color.Transparent);
+                    graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                    graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+                    WidgetRenderer.DrawLayout(graphics, new Rectangle(Point.Empty, size), layout, Sample(), backgroundAlpha: alpha);
+                    Check(bitmap.GetPixel(0, 0).A == 0, $"{layout} transparency has clear rounded corners");
+                    var body = layout == WidgetLayout.Vertical ? new Point(15, 63) : new Point(20, size.Height - 10);
+                    int bodyAlpha = bitmap.GetPixel(body.X, body.Y).A;
+                    Check(bodyAlpha >= alpha - 5 && bodyAlpha <= alpha + 5,
+                        $"{layout} requested background alpha {alpha} retained ({bodyAlpha})");
+                    bool solidBlueGlyph = false;
+                    var scan = layout == WidgetLayout.Vertical ? new Rectangle(22, 20, size.Width - 44, 34) :
+                        layout == WidgetLayout.Horizontal ? new Rectangle(20, 20, 68, 26) : new Rectangle(12, 58, 58, 36);
+                    for (int y = scan.Top; y < scan.Bottom; y++)
+                        for (int x = scan.Left; x < scan.Right; x++)
+                        {
+                            var pixel = bitmap.GetPixel(x, y);
+                            if (pixel.A >= 250 && Math.Abs(pixel.R - 116) < 8 && Math.Abs(pixel.G - 186) < 8 && Math.Abs(pixel.B - 255) < 8)
+                                solidBlueGlyph = true;
+                        }
+                    Check(solidBlueGlyph, $"{layout} CPU number keeps opaque saturated foreground at alpha {alpha}");
+                    using (var composite = new Bitmap(size.Width + 36, size.Height + 36))
+                    using (var back = Graphics.FromImage(composite))
+                    {
+                        back.Clear(Color.FromArgb(248, 250, 253));
+                        using (var stripe = new SolidBrush(Color.FromArgb(205, 232, 251)))
+                            back.FillRectangle(stripe, 0, 60, composite.Width, 70);
+                        back.DrawImageUnscaled(bitmap, 18, 18);
+                        composite.Save(Path.Combine(Output, $"BackgroundOnly-{layout}-{alpha}.png"), ImageFormat.Png);
+                    }
+                }
+            }
+        }
+    }
+
+    [DllImport("user32.dll")] private static extern int GetWindowLong(IntPtr window, int index);
+    [DllImport("user32.dll")] private static extern uint GetGuiResources(IntPtr process, uint flags);
+
+    private static void VerifyNativeTransparency()
+    {
+        var settings = new AppSettings { AlwaysOnTop = false, Opacity = WidgetOpacity.Opaque };
+        var store = new SettingsStore(Path.Combine(Output, "transparency-test-settings.json"));
+        using (var monitor = new MonitorService())
+        using (var widget = new WidgetForm(monitor, store, settings))
+        using (var process = Process.GetCurrentProcess())
+        {
+            widget.ShowWidget();
+            Pump(100);
+            uint before = GetGuiResources(process.Handle, 0);
+            foreach (WidgetLayout layout in Enum.GetValues(typeof(WidgetLayout)))
+            {
+                widget.ApplyLayout(layout);
+                widget.SetOpacity(WidgetOpacity.Percent75);
+                Pump(120);
+                var surface = Field(widget, "_layeredSurface");
+                Check(surface != null && (bool)Property(surface, "LastPresentSucceeded") &&
+                    (GetWindowLong(widget.Handle, -20) & 0x80000) != 0 && widget.Opacity == 1,
+                    $"{layout} actual layered window presents successfully without global opacity");
+                long startCount = (long)Property(surface, "PresentCount");
+                for (int i = 0; i < 100; i++) widget.Invalidate();
+                Pump(120);
+                Check(ReferenceEquals(surface, Field(widget, "_layeredSurface")) &&
+                    (long)Property(surface, "PresentCount") - startCount <= 3,
+                    $"{layout} repeated invalidations coalesce and reuse same native DIB");
+                widget.SetOpacity(WidgetOpacity.Percent50);
+                Pump(100);
+                Check(ReferenceEquals(surface, Field(widget, "_layeredSurface")) &&
+                    (bool)Property(surface, "LastPresentSucceeded"), $"{layout} 75-to-50 switch reuses native surface");
+                if (layout == WidgetLayout.Expanded)
+                {
+                    ClickMetric(widget, 0);
+                    Check(widget.SelectedProcessMetric == ProcessMetric.Cpu, "transparent widget still handles metric clicks");
+                }
+                widget.HideWidget();
+                Check(Field(widget, "_layeredSurface") == null, $"{layout} hiding releases native surface");
+                widget.ShowWidget();
+                Pump(100);
+                Check(Field(widget, "_layeredSurface") != null &&
+                    (bool)Property(Field(widget, "_layeredSurface"), "LastPresentSucceeded"),
+                    $"{layout} showing recreates a valid surface");
+                widget.SetOpacity(WidgetOpacity.Opaque);
+                Pump(100);
+                Check(Field(widget, "_layeredSurface") == null && (GetWindowLong(widget.Handle, -20) & 0x80000) == 0,
+                    $"{layout} opaque mode releases layered resources and restores normal window");
+            }
+            for (int i = 0; i < 12; i++)
+            {
+                widget.SetOpacity(WidgetOpacity.Percent75);
+                widget.SetOpacity(WidgetOpacity.Percent50);
+                widget.SetOpacity(WidgetOpacity.Opaque);
+            }
+            Pump(200);
+            uint after = GetGuiResources(process.Handle, 0);
+            Check(after <= before + 2, $"native transparency switches do not leak GDI objects ({before}->{after})");
+        }
     }
 
     private static void VerifyTrayWiring()

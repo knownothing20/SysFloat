@@ -28,7 +28,7 @@
 | 三种布局 | 横版、竖版、展开版，可通过右键菜单切换 |
 | 太平洋时钟 | 24 小时制、当地日期、PST/PDT 自动切换 |
 | 悬停详情 | 查看内存和显存已用/总量、CPU 最近采样区间、完整时间与时差 |
-| 展开版 | 查看最近采样趋势和内存占用最高的 5 个进程 |
+| 展开版联动排行 | 默认显示内存 Top 5；点击左侧 CPU、内存或显存，可切换对应进程排行，并用同色高亮关联左右两侧 |
 | 高占用提醒 | 设置阈值和持续时间，连续超限后对应数值与托盘图标变橙 |
 | 可选托盘通知 | 默认关闭；开启后最多每 5 分钟一次，通知显示也受 Windows 系统设置影响 |
 | 省资源模式 | 可选 1、3、5 秒采样；普通模式每秒采样 |
@@ -49,15 +49,25 @@
 
 ![展开版：资源趋势和进程内存排行](docs/images/expanded.png)
 
+<details>
+<summary>查看 CPU 与显存排行联动样式</summary>
+
+![CPU 进程排行](docs/images/expanded-cpu.png)
+
+![显存进程排行](docs/images/expanded-vram.png)
+
+</details>
+
 **监控设置**
 
 <img src="docs/images/monitoring-settings.png" alt="监控设置：采样间隔和高占用提醒" width="520" />
 
-截图中的时间和资源数值只是截图当时的数据，实际运行会更新。
+界面截图使用示例资源数据，时钟为绘制时的时间；实际运行会显示实时采样结果。
 
 ### 常用操作
 
 - 右键悬浮窗或托盘图标：切换布局、调整透明度或打开 **监控设置…**。
+- 展开版点击左侧 CPU、RAM 或 VRAM 区域：切换右侧对应进程排行；拖动仍可移动窗口。
 - 点击托盘图标：显示或隐藏悬浮窗。
 - 双击托盘图标：把窗口移回可见区域。
 - 展开版右上角的 `×`：隐藏窗口，后台监控和提醒继续工作。
@@ -83,6 +93,10 @@
 CPU 和物理内存通过 Windows 系统接口读取；显存通过 LibreHardwareMonitor 获取。**VRAM 表示显存使用率，不是 GPU 核心使用率**。显卡或驱动未提供相应传感器时，显示不可用，而不是猜测数值。
 
 展开版的进程排行显示内存工作集，不代表各进程完全独占的物理内存。
+
+CPU 进程排行使用进程 CPU 时间在两次采样之间的增量，并按系统逻辑处理器数量归一化；首次选择 CPU 时需要建立采样基线，因此会短暂显示等待采样。
+
+显存进程排行读取 Windows 的专用 GPU 内存计数器，按进程汇总各 GPU 的数据；左侧总体显存指标则来自显卡硬件传感器。两者口径不同，跨进程共享的显存也可能被重复计入，因此不能把右侧各进程数值相加当成左侧总占用。系统或驱动不提供计数器时，会明确显示不可用，不会用普通内存替代。详情参考 [Microsoft 的 GPU 进程内存说明](https://devblogs.microsoft.com/directx/gpus-in-the-task-manager/)；[部分 Windows 版本的计数器已知问题](https://learn.microsoft.com/en-us/troubleshoot/windows-client/performance/gpu-process-memory-counters-report-wrong-value)也可能影响这些数值。
 
 设置保存在 `%LOCALAPPDATA%\SysFloat\settings.json`。程序不需要登录，不读取 Codex、Claude 凭证，也没有新增后台联网服务。
 

@@ -12,7 +12,7 @@ namespace SysFloat.UI
                 case WidgetLayout.Horizontal:
                     return new Size((int)(448 * dpiScale), (int)(60 * dpiScale));
                 case WidgetLayout.Vertical:
-                    return new Size((int)(118 * dpiScale), (int)(340 * dpiScale));
+                    return new Size((int)(92 * dpiScale), (int)(340 * dpiScale));
                 case WidgetLayout.Expanded:
                     return new Size((int)(540 * dpiScale), (int)(320 * dpiScale));
                 default:

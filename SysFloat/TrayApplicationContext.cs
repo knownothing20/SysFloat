@@ -210,6 +210,7 @@ namespace SysFloat
             _widgetForm = new WidgetForm(_monitorService, _settingsStore, _settings);
             _widgetForm.CloseClicked += () => OnExitClick(this, EventArgs.Empty);
             _widgetForm.MonitoringOptionsRequested += ShowMonitoringOptions;
+            _widgetForm.SetInitialPosition();
             _ = _widgetForm.Handle;
             _widgetForm.ApplyMonitoringSettings();
         }

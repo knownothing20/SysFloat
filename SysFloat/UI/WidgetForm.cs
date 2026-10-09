@@ -29,8 +29,13 @@ namespace SysFloat.UI
         private SynchronizationContext _uiSynchronizationContext;
 
         private bool _isDragging;
+        private bool _isLeftPressActive;
+        private bool _dragCandidate;
+        private int _pressedProcessMetric = -1;
+        private Point _mouseDownPoint;
         private Point _dragStart;
         private Point _formStart;
+        private ProcessMetric _selectedProcessMetric = ProcessMetric.Memory;
 
         private bool _isCloseHover;
         private Rectangle _closeButtonRect;
@@ -50,6 +55,8 @@ namespace SysFloat.UI
         public event Action<bool> TopMostChanged;
         public event Action PositionChanged;
         public event Action MonitoringOptionsRequested;
+
+        public ProcessMetric SelectedProcessMetric => _selectedProcessMetric;
 
         public WidgetForm(MonitorService monitorService, SettingsStore settingsStore, AppSettings settings)
         {
@@ -299,8 +306,17 @@ namespace SysFloat.UI
             _settings.Normalize();
             int seconds = _settings.PowerSavingMode ? _settings.SamplingIntervalSeconds : 1;
             int effectiveMs = seconds * 1000;
-            _monitorService.ConfigurePolling(effectiveMs, Visible && _currentLayout == WidgetLayout.Expanded);
+            _monitorService.ConfigurePolling(effectiveMs, Visible && _currentLayout == WidgetLayout.Expanded, _selectedProcessMetric);
             Invalidate();
+        }
+
+        public void SelectProcessMetric(ProcessMetric metric)
+        {
+            if (!Enum.IsDefined(typeof(ProcessMetric), metric)) return;
+            _selectedProcessMetric = metric;
+            ApplyMonitoringSettings();
+            HideMetricToolTip();
+            if (Visible) Invalidate();
         }
 
         public void SetAlertState(AlertEvaluation state)
@@ -506,7 +522,7 @@ namespace SysFloat.UI
                 case WidgetLayout.Expanded:
                     WidgetRenderer.DrawExpanded(g, bounds, _snapshot,
                         GetChronologicalHistory(_cpuHistory), GetChronologicalHistory(_ramHistory), GetChronologicalHistory(_vramHistory), _isCloseHover,
-                        threshold, _settings.HighLoadAlertsEnabled, _activeAlertMetrics);
+                        threshold, _settings.HighLoadAlertsEnabled, _activeAlertMetrics, _selectedProcessMetric);
                     _closeButtonRect = ScaleRect(WidgetRenderer.GetCloseButtonRect(bounds, WidgetLayout.Expanded), scale);
                     break;
             }
@@ -522,20 +538,24 @@ namespace SysFloat.UI
                     HideWidget();
                     return;
                 }
-                if (!_settings.Locked)
-                {
-                    HideMetricToolTip();
-                    _isDragging = true;
-                    _dragStart = Cursor.Position;
-                    _formStart = Location;
-                    Capture = true;
-                }
+                HideMetricToolTip();
+                _isLeftPressActive = true;
+                _dragCandidate = !_settings.Locked;
+                _isDragging = false;
+                _mouseDownPoint = e.Location;
+                _pressedProcessMetric = GetProcessMetricAt(e.Location);
+                _dragStart = Cursor.Position;
+                _formStart = Location;
+                Capture = true;
             }
             base.OnMouseDown(e);
         }
 
         protected override void OnMouseMove(MouseEventArgs e)
         {
+            if (_isLeftPressActive && _dragCandidate && !_isDragging && ExceededDragThreshold(e.Location))
+                _isDragging = true;
+
             if (_isDragging)
             {
                 int dx = Cursor.Position.X - _dragStart.X;
@@ -543,28 +563,83 @@ namespace SysFloat.UI
                 Left = _formStart.X + dx;
                 Top = _formStart.Y + dy;
             }
-            else if (_currentLayout == WidgetLayout.Expanded)
+            else if (!_isLeftPressActive && _currentLayout == WidgetLayout.Expanded)
             {
                 bool wasHover = _isCloseHover;
                 _isCloseHover = _closeButtonRect.Contains(e.Location);
                 if (wasHover != _isCloseHover) Invalidate();
             }
-            if (!_isDragging) UpdateMetricToolTip(e.Location);
+            if (!_isLeftPressActive && !_isDragging)
+            {
+                UpdateCursor(e.Location);
+                UpdateMetricToolTip(e.Location);
+            }
             base.OnMouseMove(e);
         }
 
         protected override void OnMouseUp(MouseEventArgs e)
         {
-            if (_isDragging)
+            if (_isLeftPressActive && e.Button == MouseButtons.Left)
             {
+                bool dragged = _isDragging;
+                _isLeftPressActive = false;
                 _isDragging = false;
+                _dragCandidate = false;
                 Capture = false;
-                _settings.Left = Left;
-                _settings.Top = Top;
-                _settingsStore.Save(_settings);
-                PositionChanged?.Invoke();
+                if (dragged)
+                {
+                    _settings.Left = Left;
+                    _settings.Top = Top;
+                    _settingsStore.Save(_settings);
+                    PositionChanged?.Invoke();
+                }
+                else
+                {
+                    int releasedMetric = GetProcessMetricAt(e.Location);
+                    if (_pressedProcessMetric >= 0 && releasedMetric == _pressedProcessMetric)
+                        SelectProcessMetric((ProcessMetric)_pressedProcessMetric);
+                }
+                _pressedProcessMetric = -1;
+                UpdateCursor(e.Location);
             }
             base.OnMouseUp(e);
+        }
+
+        private bool ExceededDragThreshold(Point location)
+        {
+            Size dragSize = SystemInformation.DragSize;
+            int dx = Math.Abs(location.X - _mouseDownPoint.X);
+            int dy = Math.Abs(location.Y - _mouseDownPoint.Y);
+            return dx >= Math.Max(1, dragSize.Width / 2) || dy >= Math.Max(1, dragSize.Height / 2);
+        }
+
+        protected override void OnMouseCaptureChanged(EventArgs e)
+        {
+            base.OnMouseCaptureChanged(e);
+            if (!Capture && _isLeftPressActive)
+            {
+                _isLeftPressActive = false;
+                _isDragging = false;
+                _dragCandidate = false;
+                _pressedProcessMetric = -1;
+            }
+        }
+
+        private int GetProcessMetricAt(Point physicalLocation)
+        {
+            if (_currentLayout != WidgetLayout.Expanded) return -1;
+            for (int i = 0; i < 3 && i < _metricHitRects.Length; i++)
+                if (_metricHitRects[i].Contains(physicalLocation)) return i;
+            return -1;
+        }
+
+        private void UpdateCursor(Point location)
+        {
+            if (_currentLayout == WidgetLayout.Expanded &&
+                (_closeButtonRect.Contains(location) || GetProcessMetricAt(location) >= 0))
+                Cursor = Cursors.Hand;
+            else
+                Cursor = _settings.Locked ? Cursors.Default : Cursors.SizeAll;
         }
 
         public WidgetLayout GetCurrentLayout() => _currentLayout;
@@ -637,6 +712,7 @@ namespace SysFloat.UI
         {
             HideMetricToolTip();
             _isCloseHover = false;
+            if (!_isLeftPressActive) Cursor = Cursors.Default;
             Invalidate();
             base.OnMouseLeave(e);
         }

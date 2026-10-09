@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using SysFloat.Configuration;
@@ -67,8 +68,10 @@ namespace SysFloat.UI
 
         public static void DrawExpanded(Graphics g, Rectangle bounds, MetricSnapshot snapshot,
             float[] cpuHistory, float[] ramHistory, float[] vramHistory, bool isCloseHover,
-            int alertThreshold = 90, bool alertsEnabled = true, int activeAlertMetrics = 7)
+            int alertThreshold = 90, bool alertsEnabled = true, int activeAlertMetrics = 7,
+            ProcessMetric selectedMetric = ProcessMetric.Memory)
         {
+            if (!Enum.IsDefined(typeof(ProcessMetric), selectedMetric)) selectedMetric = ProcessMetric.Memory;
             DrawPanel(g, bounds, 14);
             DrawExpandedHeader(g, bounds, isCloseHover);
 
@@ -83,6 +86,8 @@ namespace SysFloat.UI
             for (int i = 0; i < 3; i++)
             {
                 int y = contentTop + i * rowHeight;
+                var rowBounds = new Rectangle(bounds.X + 7, y + 1, leftWidth - 18, rowHeight - 2);
+                if (i == (int)selectedMetric) DrawSelectedMetric(g, rowBounds, colors[i]);
                 DrawExpandedMetric(g, new Rectangle(bounds.X + 13, y + 1, leftWidth - 22, rowHeight - 2),
                     labels[i], values[i], colors[i], histories[i], snapshot, i, alertThreshold, alertsEnabled && (activeAlertMetrics & (1 << i)) != 0);
                 if (i < 2) DrawHorizontalDivider(g, bounds.X + 13, y + rowHeight, bounds.X + leftWidth - 10);
@@ -90,7 +95,9 @@ namespace SysFloat.UI
 
             int rightX = bounds.X + leftWidth;
             DrawDivider(g, rightX, contentTop + 4, bounds.Bottom - 12);
-            DrawProcessList(g, new Rectangle(rightX + 10, contentTop + 2, bounds.Right - rightX - 20, contentHeight - 4), snapshot);
+            int activeY = contentTop + ((int)selectedMetric * rowHeight) + rowHeight / 2;
+            DrawProcessList(g, new Rectangle(rightX + 11, contentTop + 2, bounds.Right - rightX - 20, contentHeight - 4), snapshot, selectedMetric);
+            DrawSelectionBridge(g, rightX, activeY, MetricColor(selectedMetric));
         }
 
         public static Rectangle GetCloseButtonRect(Rectangle bounds, WidgetLayout layout)
@@ -113,12 +120,13 @@ namespace SysFloat.UI
             int leftWidth = (int)Math.Round(bounds.Width * 0.55f);
             int contentTop = bounds.Y + 42;
             int rowHeight = (bounds.Bottom - contentTop - 8) / 3;
-            return new[] { new Rectangle(bounds.X, contentTop, leftWidth, rowHeight), new Rectangle(bounds.X, contentTop + rowHeight, leftWidth, rowHeight), new Rectangle(bounds.X, contentTop + 2 * rowHeight, leftWidth, bounds.Bottom - 8 - (contentTop + 2 * rowHeight)), new Rectangle(bounds.Right - 210, bounds.Y, 164, 38) };
+            return new[] { new Rectangle(bounds.X, contentTop, leftWidth, rowHeight), new Rectangle(bounds.X, contentTop + rowHeight, leftWidth, rowHeight), new Rectangle(bounds.X, contentTop + 2 * rowHeight, leftWidth, bounds.Bottom - 8 - (contentTop + 2 * rowHeight)), new Rectangle(bounds.Right - 224, bounds.Y + 3, 178, 34) };
         }
 
         public static void DrawLayout(Graphics g, Rectangle bounds, WidgetLayout layout, MetricSnapshot snapshot,
             float[] cpuHistory = null, float[] ramHistory = null, float[] vramHistory = null,
-            bool isCloseHover = false, int alertThreshold = 90, bool alertsEnabled = true)
+            bool isCloseHover = false, int alertThreshold = 90, bool alertsEnabled = true,
+            ProcessMetric selectedMetric = ProcessMetric.Memory)
         {
             snapshot = snapshot ?? new MetricSnapshot();
             switch (layout)
@@ -128,7 +136,7 @@ namespace SysFloat.UI
                     break;
                 case WidgetLayout.Expanded:
                     DrawExpanded(g, bounds, snapshot, cpuHistory ?? CreateEmptyHistory(), ramHistory ?? CreateEmptyHistory(),
-                        vramHistory ?? CreateEmptyHistory(), isCloseHover, alertThreshold, alertsEnabled);
+                        vramHistory ?? CreateEmptyHistory(), isCloseHover, alertThreshold, alertsEnabled, 7, selectedMetric);
                     break;
                 default:
                     DrawHorizontal(g, bounds, snapshot, alertThreshold, alertsEnabled);
@@ -177,7 +185,7 @@ namespace SysFloat.UI
             float cx = area.X + area.Width / 2f;
             using (var brush = new SolidBrush(Muted)) g.DrawString(label, LabelFont, brush, cx - ls.Width / 2f, area.Y + 8);
             using (var brush = new SolidBrush(ValueColor(value, color, threshold, alertsEnabled))) g.DrawString(valueText, ValueFont, brush, cx - vs.Width / 2f, area.Y + 25);
-            DrawUsageBar(g, area.X + area.Width * 0.25f, area.Bottom - 10, area.Width * 0.5f, value, color);
+            DrawUsageBar(g, area.X + 4, area.Bottom - 10, area.Width - 8, value, color);
         }
 
         private static void DrawClock(Graphics g, Rectangle area, bool vertical)
@@ -211,12 +219,19 @@ namespace SysFloat.UI
             using (var brush = new SolidBrush(Text)) g.DrawString("SysFloat", TitleFont, brush, bounds.X + 14, bounds.Y + 10);
             DateTime utc = DateTime.UtcNow;
             DateTime local = PacificClock.GetPacificTime(utc);
+            string location = "太平洋 · " + PacificClock.GetAbbreviation(utc);
             string time = local.ToString("HH:mm");
-            float clockX = bounds.Right - 206;
-            using (var brush = new SolidBrush(Text)) g.DrawString(time, ClockFont, brush, clockX, bounds.Y + 2);
-            string subtitle = "太平洋  " + PacificClock.GetAbbreviation(utc) + "  " + local.ToString("MM/dd");
-            var size = g.MeasureString(subtitle, DetailFont);
-            using (var brush = new SolidBrush(Muted)) g.DrawString(subtitle, DetailFont, brush, bounds.Right - 46 - size.Width, bounds.Y + 25);
+            string date = local.ToString("MM/dd");
+            float locationWidth = g.MeasureString(location, DetailFont).Width;
+            float timeWidth = g.MeasureString(time, ClockFont).Width;
+            float dateWidth = g.MeasureString(date, DetailFont).Width;
+            float gap = 8f;
+            float totalWidth = locationWidth + gap + timeWidth + gap + dateWidth;
+            float startX = bounds.Right - 46 - totalWidth;
+            float baseline = bounds.Y + 30;
+            using (var brush = new SolidBrush(Muted)) g.DrawString(location, DetailFont, brush, startX, baseline - DetailFont.Height);
+            using (var brush = new SolidBrush(Text)) g.DrawString(time, ClockFont, brush, startX + locationWidth + gap, baseline - ClockFont.Height);
+            using (var brush = new SolidBrush(Muted)) g.DrawString(date, DetailFont, brush, startX + locationWidth + gap + timeWidth + gap, baseline - DetailFont.Height);
             Color close = closeHover ? Color.FromArgb(255, 110, 110) : Muted;
             using (var pen = new Pen(close, 1.6f))
             {
@@ -263,30 +278,127 @@ namespace SysFloat.UI
             }
         }
 
-        private static void DrawProcessList(Graphics g, Rectangle bounds, MetricSnapshot snapshot)
+        private static void DrawSelectedMetric(Graphics g, Rectangle bounds, Color color)
         {
-            using (var brush = new SolidBrush(Muted)) g.DrawString("内存占用 Top 5", LabelFont, brush, bounds.X, bounds.Y + 4);
-            int top = bounds.Y + 26;
-            int rowHeight = Math.Max(24, (bounds.Height - 30) / 5);
-            var processes = snapshot.TopMemoryProcesses;
-            if (processes == null || processes.Count == 0)
+            using (var path = CreateRoundedRectPath(bounds, 8))
+            using (var fill = new SolidBrush(Color.FromArgb(30, color)))
+            using (var edge = new Pen(Color.FromArgb(70, color), 1f))
             {
-                using (var brush = new SolidBrush(Dim)) g.DrawString("等待数据…", ProcessFont, brush, bounds.X, top + 4);
+                g.FillPath(fill, path);
+                g.DrawPath(edge, path);
+            }
+            using (var brush = new SolidBrush(color)) g.FillRectangle(brush, bounds.X, bounds.Y + 8, 2, Math.Max(8, bounds.Height - 16));
+        }
+
+        private static void DrawSelectionBridge(Graphics g, int seamX, int centerY, Color color)
+        {
+            using (var pen = new Pen(Color.FromArgb(170, color), 2f)) g.DrawLine(pen, seamX - 8, centerY, seamX + 14, centerY);
+            using (var brush = new SolidBrush(color)) g.FillEllipse(brush, seamX - 2, centerY - 2, 4, 4);
+        }
+
+        private static Color MetricColor(ProcessMetric metric)
+        {
+            switch (metric)
+            {
+                case ProcessMetric.Cpu: return Cpu;
+                case ProcessMetric.Vram: return Vram;
+                default: return Ram;
+            }
+        }
+
+        private static void DrawProcessList(Graphics g, Rectangle bounds, MetricSnapshot snapshot, ProcessMetric selectedMetric)
+        {
+            Color accent = MetricColor(selectedMetric);
+            using (var path = CreateRoundedRectPath(bounds, 10))
+            using (var fill = new SolidBrush(Color.FromArgb(20, accent)))
+            using (var border = new Pen(Color.FromArgb(72, accent), 1f))
+            {
+                g.FillPath(fill, path);
+                g.DrawPath(border, path);
+            }
+
+            string title;
+            string subtitle;
+            List<ProcessInfo> processes;
+            string emptyMessage;
+            if (selectedMetric == ProcessMetric.Cpu)
+            {
+                title = "CPU 占用 Top 5";
+                subtitle = "按每进程 CPU 使用率排序";
+                processes = snapshot.TopCpuProcesses;
+                emptyMessage = "暂无 CPU 占用进程";
+            }
+            else if (selectedMetric == ProcessMetric.Vram)
+            {
+                title = "显存占用 Top 5";
+                subtitle = "专用显存 · 跨 GPU";
+                processes = snapshot.TopVramProcesses;
+                emptyMessage = "暂无显存占用进程";
+            }
+            else
+            {
+                title = "内存占用 Top 5";
+                subtitle = "按工作集占用排序";
+                processes = snapshot.TopMemoryProcesses;
+                emptyMessage = "暂无内存占用进程";
+            }
+
+            using (var brush = new SolidBrush(accent)) g.DrawString(title, LabelFont, brush, bounds.X + 10, bounds.Y + 7);
+            using (var brush = new SolidBrush(Muted)) g.DrawString(subtitle, DetailFont, brush, bounds.X + 10, bounds.Y + 23);
+            using (var pen = new Pen(Color.FromArgb(100, accent), 1f)) g.DrawLine(pen, bounds.X + 10, bounds.Y + 39, bounds.Right - 10, bounds.Y + 39);
+
+            string unavailableMessage = null;
+            if (snapshot.RankingMetric != selectedMetric)
+                unavailableMessage = "正在切换排行…";
+            else if (selectedMetric == ProcessMetric.Cpu && !snapshot.CpuProcessesAvailable)
+                unavailableMessage = "正在采样 CPU…";
+            else if (selectedMetric == ProcessMetric.Vram && !snapshot.VramProcessesAvailable)
+            {
+                string status = snapshot.VramProcessesStatus;
+                unavailableMessage = string.IsNullOrWhiteSpace(status) || status == "等待显存数据"
+                    ? "系统未提供进程显存数据" : status;
+            }
+
+            int listTop = bounds.Y + 46;
+            if (unavailableMessage != null)
+            {
+                string visibleMessage = Ellipsize(g, unavailableMessage, ProcessFont, bounds.Width - 24);
+                using (var brush = new SolidBrush(Dim)) g.DrawString(visibleMessage, ProcessFont, brush, bounds.X + 10, listTop + 8);
                 return;
             }
+            if (processes == null || processes.Count == 0)
+            {
+                using (var brush = new SolidBrush(Dim)) g.DrawString(emptyMessage, ProcessFont, brush, bounds.X + 10, listTop + 8);
+                return;
+            }
+
             int count = Math.Min(5, processes.Count);
+            int rowHeight = Math.Max(30, (bounds.Bottom - listTop - 5) / 5);
             for (int i = 0; i < count; i++)
             {
-                var proc = processes[i];
-                int y = top + i * rowHeight;
-                string name = string.IsNullOrWhiteSpace(proc.Name) ? "未知进程" : proc.Name;
-                var value = FormatBytes(proc.MemoryBytes);
-                float valueWidth = g.MeasureString(value, ProcessValueFont).Width;
-                int nameWidth = Math.Max(24, bounds.Width - (int)valueWidth - 19);
+                ProcessInfo process = processes[i];
+                int y = listTop + i * rowHeight;
+                string name = string.IsNullOrWhiteSpace(process.Name) ? "未知进程" : process.Name;
+                string metricText;
+                if (selectedMetric == ProcessMetric.Cpu)
+                    metricText = HasSample(process.CpuPercent) ? process.CpuPercent.ToString("0.0") + "%" : "--";
+                else if (selectedMetric == ProcessMetric.Vram)
+                    metricText = FormatBytes(process.VramBytes);
+                else
+                    metricText = FormatBytes(process.MemoryBytes);
+
+                float valueWidth = g.MeasureString(metricText, ProcessValueFont).Width;
+                int nameWidth = Math.Max(20, bounds.Width - (int)valueWidth - 32);
                 name = Ellipsize(g, name, ProcessFont, nameWidth);
-                using (var brush = new SolidBrush(i == 0 ? Text : Muted)) g.DrawString(name, ProcessFont, brush, bounds.X, y + 2);
-                using (var brush = new SolidBrush(i == 0 ? Vram : Muted)) g.DrawString(value, ProcessValueFont, brush, bounds.Right - valueWidth, y + 2);
-                if (i < count - 1) DrawHorizontalDivider(g, bounds.X, y + rowHeight - 2, bounds.Right);
+                using (var brush = new SolidBrush(i == 0 ? Text : Muted))
+                    g.DrawString(name, ProcessFont, brush, bounds.X + 10, y + 5);
+                using (var brush = new SolidBrush(i == 0 ? accent : Muted))
+                    g.DrawString(metricText, ProcessValueFont, brush, bounds.Right - 10 - valueWidth, y + 5);
+                if (i < count - 1)
+                {
+                    using (var pen = new Pen(Color.FromArgb(45, accent), 1f))
+                        g.DrawLine(pen, bounds.X + 10, y + rowHeight - 1, bounds.Right - 10, y + rowHeight - 1);
+                }
             }
         }
 

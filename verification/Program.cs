@@ -30,7 +30,10 @@ internal static class Program
             VerifyAlert();
             VerifySettings();
             VerifyGpuUnits();
+            VerifyProcessCpuTracker();
+            VerifyProcessVramCounter();
             RenderLayouts();
+            RenderLinkedRankings();
             VerifyLiveWiring();
             VerifyTrayWiring();
             Console.WriteLine($"PASS {_passed} checks. Evidence: {Output}");
@@ -160,6 +163,66 @@ internal static class Program
         Check(!(bool)convert.Invoke(null, args), "nonfinite GPU sensor rejected");
     }
 
+    private static void VerifyProcessCpuTracker()
+    {
+        var assembly = typeof(MonitorService).Assembly;
+        var sampleType = assembly.GetType("SysFloat.Monitoring.ProcessCpuSample");
+        var trackerType = assembly.GetType("SysFloat.Monitoring.ProcessCpuTracker");
+        var tracker = Activator.CreateInstance(trackerType, true);
+        var update = trackerType.GetMethod("Update");
+        object Result(long timestamp, long cpuTicksA, long cpuTicksB, long startA = 2000)
+        {
+            var samples = Array.CreateInstance(sampleType, 2);
+            foreach (int i in new[] { 0, 1 })
+            {
+                var sample = Activator.CreateInstance(sampleType, true);
+                SetProperty(sample, "ProcessId", i + 7);
+                SetProperty(sample, "Name", i == 0 ? "CPU A" : "CPU B");
+                SetProperty(sample, "StartTimeTicks", i == 0 ? startA : 2000L);
+                SetProperty(sample, "TotalProcessorTimeTicks", i == 0 ? cpuTicksA : cpuTicksB);
+                SetProperty(sample, "MonotonicTimestamp", timestamp);
+                samples.SetValue(sample, i);
+            }
+            return update.Invoke(tracker, new object[] { samples, 0, 4, 1000L });
+        }
+        object first = Result(1000, 10000000, 10000000);
+        Check(!(bool)first.GetType().GetProperty("Available").GetValue(first), "CPU baseline has no fabricated ranking");
+        object second = Result(3000, 20000000, 30000000);
+        var rows = (List<ProcessInfo>)second.GetType().GetProperty("Processes").GetValue(second);
+        Check(rows.Count == 2 && rows[0].ProcessId == 8 && Math.Abs(rows[0].CpuPercent - 25) < 0.001 &&
+            Math.Abs(rows[1].CpuPercent - 12.5) < 0.001, "CPU deltas normalized over elapsed time and logical cores");
+        object reusedPid = Result(5000, 90000000, 30000000, 4000);
+        var reusedRows = (List<ProcessInfo>)reusedPid.GetType().GetProperty("Processes").GetValue(reusedPid);
+        Check(reusedRows.TrueForAll(row => row.ProcessId != 7), "PID reuse never inherits previous CPU baseline");
+        object stale = Result(70000, 100000000, 40000000, 4000);
+        Check(!(bool)stale.GetType().GetProperty("Available").GetValue(stale), "stale CPU sampling gap resets delta baseline");
+    }
+
+    private static void VerifyProcessVramCounter()
+    {
+        var type = typeof(MonitorService).Assembly.GetType("SysFloat.Monitoring.ProcessVramMonitor");
+        var parse = type.GetMethod("TryParseProcessId", BindingFlags.Static | BindingFlags.NonPublic);
+        object[] args = { "pid_1234_luid_0x00000000_0x0000aab5_phys_0", 0 };
+        Check((bool)parse.Invoke(null, args) && (int)args[1] == 1234, "VRAM instance PID parsed correctly");
+        args = new object[] { "_Total", 0 };
+        Check(!(bool)parse.Invoke(null, args), "VRAM total instance is not assigned to a fake process");
+        using (var reader = (IDisposable)Activator.CreateInstance(type, true))
+        {
+            var read = type.GetMethod("ReadUsageByProcess");
+            type.GetMethod("SetGeneration").Invoke(reader, new object[] { 1, true });
+            object sample = read.Invoke(reader, new object[] { 1 });
+            bool available = (bool)sample.GetType().GetProperty("Available").GetValue(sample);
+            var values = (Dictionary<int, ulong>)sample.GetType().GetProperty("UsageByProcessId").GetValue(sample);
+            string status = (string)sample.GetType().GetProperty("Status").GetValue(sample);
+            Check(available && values.Count > 0, "native PDH query returns real local per-process dedicated VRAM: " + status);
+            type.GetMethod("Reset").Invoke(reader, null);
+            Check((IntPtr)Field(reader, "_query") == IntPtr.Zero, "leaving VRAM closes native PDH handle");
+            reader.Dispose();
+            object after = read.Invoke(reader, new object[] { 1 });
+            Check(!(bool)after.GetType().GetProperty("Available").GetValue(after), "disposed VRAM reader cannot reopen a query");
+        }
+    }
+
     private static MetricSnapshot Sample() => new MetricSnapshot
     {
         CpuPercent = 23, MemoryPercent = 33, MemoryUsedBytes = (ulong)(15.5 * 1024 * 1024 * 1024),
@@ -172,6 +235,45 @@ internal static class Program
             new ProcessInfo { Name = "claude", MemoryBytes = 527UL * 1024 * 1024 },
             new ProcessInfo { Name = "Explorer", MemoryBytes = 221UL * 1024 * 1024 } }
     };
+
+    private static void RenderLinkedRankings()
+    {
+        var history = new float[60];
+        for (int i = 0; i < history.Length; i++) history[i] = 15 + (float)Math.Sin(i) * 4;
+        foreach (ProcessMetric metric in Enum.GetValues(typeof(ProcessMetric)))
+        {
+            foreach (float scale in new[] { 1f, 1.5f, 2f })
+            {
+                var snapshot = Sample();
+                snapshot.RankingMetric = metric;
+                snapshot.CpuProcessesAvailable = true;
+                snapshot.VramProcessesAvailable = true;
+                snapshot.TopCpuProcesses = new List<ProcessInfo> {
+                    new ProcessInfo { Name = "Example CPU worker", CpuPercent = 23.5f },
+                    new ProcessInfo { Name = "Browser", CpuPercent = 8.2f },
+                    new ProcessInfo { Name = "Editor", CpuPercent = 3.1f } };
+                snapshot.TopVramProcesses = new List<ProcessInfo> {
+                    new ProcessInfo { Name = "Example GPU app", VramBytes = 512UL * 1024 * 1024 },
+                    new ProcessInfo { Name = "Browser", VramBytes = 256UL * 1024 * 1024 },
+                    new ProcessInfo { Name = "Desktop compositor", VramBytes = 128UL * 1024 * 1024 } };
+                var logical = WidgetSizeHelper.GetSize(WidgetLayout.Expanded, 1f);
+                var physical = WidgetSizeHelper.GetSize(WidgetLayout.Expanded, scale);
+                using (var bitmap = new Bitmap(physical.Width, physical.Height))
+                using (var graphics = Graphics.FromImage(bitmap))
+                {
+                    bitmap.SetResolution(scale * 96, scale * 96);
+                    graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                    graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+                    graphics.ScaleTransform(scale, scale);
+                    WidgetRenderer.DrawLayout(graphics, new Rectangle(Point.Empty, logical), WidgetLayout.Expanded,
+                        snapshot, history, history, history, selectedMetric: metric);
+                    bitmap.Save(Path.Combine(Output, $"Expanded-{metric}-{scale * 100:0}.png"), ImageFormat.Png);
+                }
+            }
+        }
+        Check(WidgetSizeHelper.GetSize(WidgetLayout.Vertical, 1f).Width <= 96,
+            "vertical widget reduced side margins to at most 96 logical pixels");
+    }
 
     private static void RenderLayouts()
     {
@@ -229,8 +331,34 @@ internal static class Program
             Check(Field(monitor, "_processTimer") == null, "hidden widget creates no process scanner");
             widget.ShowWidget();
             widget.ApplyLayout(WidgetLayout.Expanded);
+            settings.PowerSavingMode = false;
+            widget.ApplyMonitoringSettings();
             Pump(600);
             Check(Field(monitor, "_processTimer") != null, "visible expanded layout enables actual process scanner");
+            Check(widget.SelectedProcessMetric == ProcessMetric.Memory, "expanded process ranking defaults to memory");
+            ClickMetric(widget, 0);
+            Check(widget.SelectedProcessMetric == ProcessMetric.Cpu, "actual CPU row click selects CPU ranking");
+            PumpUntil(() => ((MetricSnapshot)Field(widget, "_snapshot")).RankingMetric == ProcessMetric.Cpu &&
+                ((MetricSnapshot)Field(widget, "_snapshot")).CpuProcessesAvailable, 8500, "real CPU rank completes baseline and second sample");
+            var cpuSnapshot = (MetricSnapshot)Field(widget, "_snapshot");
+            Check(cpuSnapshot.TopCpuProcesses.Count > 0 && SortedCpu(cpuSnapshot.TopCpuProcesses),
+                "real CPU ranking has valid percentages sorted by CPU, not RAM");
+            settings.Locked = true;
+            ClickMetric(widget, 2);
+            Check(widget.SelectedProcessMetric == ProcessMetric.Vram, "locked window still allows VRAM row selection");
+            PumpUntil(() => ((MetricSnapshot)Field(widget, "_snapshot")).RankingMetric == ProcessMetric.Vram, 4000,
+                "real VRAM selection publishes its own metric snapshot");
+            var gpuSnapshot = (MetricSnapshot)Field(widget, "_snapshot");
+            Check(gpuSnapshot.VramProcessesAvailable && gpuSnapshot.TopVramProcesses.Count > 0,
+                "local Windows dedicated GPU counters return actual process VRAM");
+            Console.WriteLine("VRAM top: " + gpuSnapshot.TopVramProcesses[0].Name + " " + gpuSnapshot.TopVramProcesses[0].VramBytes + " bytes");
+            ClickMetric(widget, 1);
+            Check(widget.SelectedProcessMetric == ProcessMetric.Memory, "RAM click restores memory ranking");
+            Check((IntPtr)Field(Field(monitor, "_processVramMonitor"), "_query") == IntPtr.Zero,
+                "switching VRAM back to memory closes its native query");
+            settings.Locked = false;
+            DragMetricWithoutSwitch(widget);
+            Check(widget.SelectedProcessMetric == ProcessMetric.Memory, "dragging a CPU row does not switch current ranking");
             widget.ApplyLayout(WidgetLayout.Vertical);
             Check(Field(monitor, "_processTimer") == null, "vertical layout stops process scanner");
             widget.ApplyLayout(WidgetLayout.Horizontal);
@@ -254,6 +382,46 @@ internal static class Program
     {
         foreach (ToolStripItem item in menu.Items) if (item.Text.Contains("监控设置")) return true;
         return false;
+    }
+
+    private static void ClickMetric(WidgetForm widget, int metric)
+    {
+        var rects = (Rectangle[])Field(widget, "_metricHitRects");
+        var area = rects[metric];
+        var location = new Point(area.Left + area.Width / 2, area.Top + area.Height / 2);
+        var args = new MouseEventArgs(MouseButtons.Left, 1, location.X, location.Y, 0);
+        typeof(WidgetForm).GetMethod("OnMouseDown", Hidden).Invoke(widget, new object[] { args });
+        typeof(WidgetForm).GetMethod("OnMouseUp", Hidden).Invoke(widget, new object[] { args });
+        Application.DoEvents();
+    }
+
+    private static void DragMetricWithoutSwitch(WidgetForm widget)
+    {
+        var area = ((Rectangle[])Field(widget, "_metricHitRects"))[0];
+        var point = new Point(area.Left + area.Width / 2, area.Top + area.Height / 2);
+        var pressed = new MouseEventArgs(MouseButtons.Left, 1, point.X, point.Y, 0);
+        var moved = new MouseEventArgs(MouseButtons.Left, 1, point.X + 30, point.Y + 20, 0);
+        typeof(WidgetForm).GetMethod("OnMouseDown", Hidden).Invoke(widget, new object[] { pressed });
+        typeof(WidgetForm).GetMethod("OnMouseMove", Hidden).Invoke(widget, new object[] { moved });
+        typeof(WidgetForm).GetMethod("OnMouseUp", Hidden).Invoke(widget, new object[] { moved });
+    }
+
+    private static void PumpUntil(Func<bool> predicate, int timeoutMilliseconds, string message)
+    {
+        var timer = Stopwatch.StartNew();
+        while (!predicate() && timer.ElapsedMilliseconds < timeoutMilliseconds) Pump(50);
+        Check(predicate(), message);
+    }
+
+    private static bool SortedCpu(List<ProcessInfo> rows)
+    {
+        float previous = 101;
+        foreach (var row in rows)
+        {
+            if (float.IsNaN(row.CpuPercent) || row.CpuPercent < 0 || row.CpuPercent > previous) return false;
+            previous = row.CpuPercent;
+        }
+        return true;
     }
 
     private static void VerifyTrayWiring()

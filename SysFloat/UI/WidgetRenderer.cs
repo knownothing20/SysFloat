@@ -357,15 +357,15 @@ namespace SysFloat.UI
             string emptyMessage;
             if (selectedMetric == ProcessMetric.Cpu)
             {
-                title = "CPU 占用 Top 5";
-                subtitle = "按每进程 CPU 使用率排序";
+                title = "应用 CPU Top 5";
+                subtitle = "应用合计 · 约 5 秒平均";
                 processes = snapshot.TopCpuProcesses;
                 emptyMessage = "暂无 CPU 占用进程";
             }
             else if (selectedMetric == ProcessMetric.Vram)
             {
-                title = "显存占用 Top 5";
-                subtitle = "专用显存 · 跨 GPU";
+                title = "应用显存 Top 5";
+                subtitle = "应用合计 · 专用显存";
                 processes = snapshot.TopVramProcesses;
                 emptyMessage = "暂无显存占用进程";
             }
@@ -416,8 +416,7 @@ namespace SysFloat.UI
                 ProcessInfo process = processes[i];
                 int y = listTop + i * rowHeight;
                 string name = string.IsNullOrWhiteSpace(process.Name) ? "未知进程" : process.Name;
-                if (selectedMetric == ProcessMetric.Memory && process.ProcessCount > 1)
-                    name += " (" + process.ProcessCount + ")";
+                string countSuffix = process.ProcessCount > 1 ? " (" + process.ProcessCount + ")" : "";
                 string metricText;
                 if (selectedMetric == ProcessMetric.Cpu)
                     metricText = HasSample(process.CpuPercent) ? process.CpuPercent.ToString("0.0") + "%" : "--";
@@ -428,7 +427,8 @@ namespace SysFloat.UI
 
                 float valueWidth = g.MeasureString(metricText, ProcessValueFont).Width;
                 int nameWidth = Math.Max(20, bounds.Width - (int)valueWidth - 32);
-                name = Ellipsize(g, name, ProcessFont, nameWidth);
+                int suffixWidth = (int)Math.Ceiling(g.MeasureString(countSuffix, ProcessFont).Width);
+                name = Ellipsize(g, name, ProcessFont, Math.Max(10, nameWidth - suffixWidth)) + countSuffix;
                 using (var brush = new SolidBrush(i == 0 ? Text : muted))
                     g.DrawString(name, ProcessFont, brush, bounds.X + 10, y + 5);
                 using (var brush = new SolidBrush(i == 0 ? accent : muted))

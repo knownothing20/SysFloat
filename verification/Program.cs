@@ -32,6 +32,7 @@ internal static class Program
             VerifySettings();
             VerifyGpuUnits();
             VerifyProcessCpuTracker();
+            ApplicationGroupingChecks.Run(Check);
             VerifyProcessVramCounter();
             VerifyApplicationMemory();
             RenderLayouts();
@@ -200,6 +201,27 @@ internal static class Program
         Check(reusedRows.TrueForAll(row => row.ProcessId != 7), "PID reuse never inherits previous CPU baseline");
         object stale = Result(70000, 100000000, 40000000, 4000);
         Check(!(bool)stale.GetType().GetProperty("Available").GetValue(stale), "stale CPU sampling gap resets delta baseline");
+
+        var allTracker = Activator.CreateInstance(trackerType, true);
+        object Many(long timestamp, long cpuTicks)
+        {
+            var samples = Array.CreateInstance(sampleType, 8);
+            for (int i = 0; i < samples.Length; i++)
+            {
+                var sample = Activator.CreateInstance(sampleType, true);
+                SetProperty(sample, "ProcessId", 100 + i);
+                SetProperty(sample, "Name", "worker");
+                SetProperty(sample, "StartTimeTicks", 2000L);
+                SetProperty(sample, "TotalProcessorTimeTicks", cpuTicks);
+                SetProperty(sample, "MonotonicTimestamp", timestamp);
+                samples.SetValue(sample, i);
+            }
+            return update.Invoke(allTracker, new object[] { samples, 0, 4, 1000L });
+        }
+        Many(1000, 10000000);
+        var allResult = Many(3000, 11000000);
+        var allRows = (List<ProcessInfo>)allResult.GetType().GetProperty("Processes").GetValue(allResult);
+        Check(allRows.Count == 8, "CPU retains every readable PID before application aggregation, not just five");
     }
 
     private static void VerifyProcessVramCounter()
@@ -253,12 +275,12 @@ internal static class Program
                 snapshot.CpuProcessesAvailable = true;
                 snapshot.VramProcessesAvailable = true;
                 snapshot.TopCpuProcesses = new List<ProcessInfo> {
-                    new ProcessInfo { Name = "Example CPU worker", CpuPercent = 23.5f },
-                    new ProcessInfo { Name = "Browser", CpuPercent = 8.2f },
+                    new ProcessInfo { Name = "Example CPU app", ProcessCount = 12, CpuPercent = 23.5f },
+                    new ProcessInfo { Name = "Browser", ProcessCount = 8, CpuPercent = 8.2f },
                     new ProcessInfo { Name = "Editor", CpuPercent = 3.1f } };
                 snapshot.TopVramProcesses = new List<ProcessInfo> {
-                    new ProcessInfo { Name = "Example GPU app", VramBytes = 512UL * 1024 * 1024 },
-                    new ProcessInfo { Name = "Browser", VramBytes = 256UL * 1024 * 1024 },
+                    new ProcessInfo { Name = "Example GPU app", ProcessCount = 4, VramBytes = 512UL * 1024 * 1024 },
+                    new ProcessInfo { Name = "Browser", ProcessCount = 8, VramBytes = 256UL * 1024 * 1024 },
                     new ProcessInfo { Name = "Desktop compositor", VramBytes = 128UL * 1024 * 1024 } };
                 var logical = WidgetSizeHelper.GetSize(WidgetLayout.Expanded, 1f);
                 var physical = WidgetSizeHelper.GetSize(WidgetLayout.Expanded, scale);
@@ -341,6 +363,7 @@ internal static class Program
             Pump(600);
             Check(Field(monitor, "_processTimer") != null, "visible expanded layout enables actual process scanner");
             Check(widget.SelectedProcessMetric == ProcessMetric.Memory, "expanded process ranking defaults to memory");
+            ApplicationGroupingChecks.VerifyCpuProjection(monitor, Check);
             PumpUntil(() => ((MetricSnapshot)Field(widget, "_snapshot")).TopMemoryProcesses.Count > 0 &&
                 ((MetricSnapshot)Field(widget, "_snapshot")).CpuPercent >= 0, 3500,
                 "real grouped application memory reaches the visible widget");
@@ -369,6 +392,11 @@ internal static class Program
             var cpuSnapshot = (MetricSnapshot)Field(widget, "_snapshot");
             Check(cpuSnapshot.TopCpuProcesses.Count > 0 && SortedCpu(cpuSnapshot.TopCpuProcesses),
                 "real CPU ranking has valid percentages sorted by CPU, not RAM");
+            Check(cpuSnapshot.TopCpuProcesses.Count <= 5 &&
+                cpuSnapshot.TopCpuProcesses.Exists(row => row.ProcessCount > 1),
+                "live CPU ranking publishes application totals and member counts after Top 5 selection");
+            foreach (var row in cpuSnapshot.TopCpuProcesses)
+                Console.WriteLine($"Application CPU: {row.Name} ({row.ProcessCount}) {row.CpuPercent:0.00}%");
             settings.Locked = true;
             ClickMetric(widget, 2);
             Check(widget.SelectedProcessMetric == ProcessMetric.Vram, "locked window still allows VRAM row selection");
@@ -377,6 +405,9 @@ internal static class Program
             var gpuSnapshot = (MetricSnapshot)Field(widget, "_snapshot");
             Check(gpuSnapshot.VramProcessesAvailable && gpuSnapshot.TopVramProcesses.Count > 0,
                 "local Windows dedicated GPU counters return actual process VRAM");
+            Check(gpuSnapshot.TopVramProcesses.Count <= 5 &&
+                gpuSnapshot.TopVramProcesses.TrueForAll(row => row.ProcessCount >= 1),
+                "live VRAM ranking preserves application member counts and Top 5 limit");
             Console.WriteLine("VRAM top: " + gpuSnapshot.TopVramProcesses[0].Name + " " + gpuSnapshot.TopVramProcesses[0].VramBytes + " bytes");
             ClickMetric(widget, 1);
             Check(widget.SelectedProcessMetric == ProcessMetric.Memory, "RAM click restores memory ranking");
@@ -519,6 +550,40 @@ internal static class Program
         }
         var aborted = collect.Invoke(collector, new object[] { new Func<bool>(() => false) });
         Check((bool)Property(aborted, "Aborted"), "hidden/switched memory collection cancels before native work");
+
+        using (var self = Process.GetCurrentProcess())
+        {
+            long beforeCpu = self.TotalProcessorTime.Ticks;
+            var identity = readerType.GetMethod("ReadIdentity", Hidden).Invoke(reader, new object[] { self.Id });
+            self.Refresh();
+            long afterCpu = self.TotalProcessorTime.Ticks;
+            long nativeCpu = (long)Property(identity, "CpuTimeTicks");
+            Check((bool)Property(identity, "CpuTimeAvailable") && nativeCpu >= beforeCpu && nativeCpu <= afterCpu &&
+                (ulong)Property(identity, "CreationTime") == (ulong)self.StartTime.ToUniversalTime().ToFileTimeUtc(),
+                "single native handle returns matching process creation identity and cumulative CPU time");
+            Check(!(bool)Property(identity, "PrivateWorkingSetAvailable"),
+                "identity-only CPU/VRAM read does not populate private memory counters");
+        }
+        var collectIdentities = collectorType.GetMethod("CollectApplicationIdentities", Hidden);
+        object identityResult = collectIdentities.Invoke(collector, new object[] { null });
+        Check((bool)Property(identityResult, "Available"), "live lightweight application identity graph is available");
+        var identitySamples = (System.Collections.IEnumerable)Property(identityResult, "Samples");
+        int cpuIdentities = 0;
+        foreach (object identity in identitySamples)
+            if ((bool)Property(identity, "CpuTimeAvailable")) cpuIdentities++;
+        Check(cpuIdentities > 1, "identity snapshot carries same-handle native CPU samples for application grouping");
+        using (var self = Process.GetCurrentProcess())
+        {
+            int beforeHandles = self.HandleCount;
+            var watch = Stopwatch.StartNew();
+            for (int i = 0; i < 5; i++) identityResult = collectIdentities.Invoke(collector, new object[] { null });
+            watch.Stop();
+            self.Refresh();
+            Check(self.HandleCount <= beforeHandles + 4, "repeated identity-only sampling does not leak native handles");
+            Console.WriteLine($"Identity-only collector: cachedAvg={watch.Elapsed.TotalMilliseconds / 5:0.0}ms handles={beforeHandles}->{self.HandleCount}");
+        }
+        var cancelledIdentities = collectIdentities.Invoke(collector, new object[] { new Func<bool>(() => false) });
+        Check((bool)Property(cancelledIdentities, "Aborted"), "hidden/switched identity-only collection cancels before native work");
     }
 
     private static void VerifyBackgroundTransparency()

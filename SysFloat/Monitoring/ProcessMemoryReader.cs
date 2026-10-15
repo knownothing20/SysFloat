@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -12,6 +13,9 @@ namespace SysFloat.Monitoring
         public int ProcessId { get; set; }
         public ulong CreationTime { get; set; }
         public string ImagePath { get; set; }
+        public long CpuTimeTicks { get; set; }
+        public long CpuMonotonicTimestamp { get; set; }
+        public bool CpuTimeAvailable { get; set; }
         public bool PrivateWorkingSetAvailable { get; set; }
         public ulong PrivateWorkingSetBytes { get; set; }
     }
@@ -157,6 +161,40 @@ namespace SysFloat.Monitoring
             return result;
         }
 
+        internal ProcessMemoryReadResult ReadIdentity(int processId)
+        {
+            var result = new ProcessMemoryReadResult { ProcessId = processId };
+            if (processId <= 0)
+                return result;
+
+            try
+            {
+                using (SafeProcessHandle process = OpenProcessForQuery(unchecked((uint)processId),
+                    out _, out _))
+                {
+                    if (process == null || process.IsInvalid)
+                        return result;
+
+                    if (TryGetProcessIdentityAndCpuTime(process, out ulong creationTime,
+                        out long cpuTimeTicks, out long cpuTimestamp))
+                    {
+                        result.CreationTime = creationTime;
+                        result.CpuTimeTicks = cpuTimeTicks;
+                        result.CpuMonotonicTimestamp = cpuTimestamp;
+                        result.CpuTimeAvailable = true;
+                    }
+
+                    result.ImagePath = ResolveImagePath(process, processId, result.CreationTime);
+                }
+            }
+            catch
+            {
+                // A process can exit or become protected between enumeration and sampling.
+            }
+
+            return result;
+        }
+
         internal void PruneImagePathCache(ISet<int> activeProcessIds)
         {
             var removed = new List<int>();
@@ -278,6 +316,28 @@ namespace SysFloat.Monitoring
 
             creationTime = ((ulong)created.HighDateTime << 32) | created.LowDateTime;
             return creationTime != 0;
+        }
+
+        private static bool TryGetProcessIdentityAndCpuTime(SafeProcessHandle process, out ulong creationTime,
+            out long cpuTimeTicks, out long monotonicTimestamp)
+        {
+            creationTime = 0;
+            cpuTimeTicks = 0;
+            monotonicTimestamp = 0;
+            if (!GetProcessTimes(process, out FileTime created, out _, out FileTime kernelTime,
+                out FileTime userTime))
+                return false;
+
+            creationTime = ((ulong)created.HighDateTime << 32) | created.LowDateTime;
+            ulong kernelTicks = ((ulong)kernelTime.HighDateTime << 32) | kernelTime.LowDateTime;
+            ulong userTicks = ((ulong)userTime.HighDateTime << 32) | userTime.LowDateTime;
+            if (creationTime == 0 || ulong.MaxValue - kernelTicks < userTicks ||
+                kernelTicks + userTicks > long.MaxValue)
+                return false;
+
+            cpuTimeTicks = (long)(kernelTicks + userTicks);
+            monotonicTimestamp = Stopwatch.GetTimestamp();
+            return monotonicTimestamp > 0;
         }
 
         private static string TryGetImagePath(SafeProcessHandle process)

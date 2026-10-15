@@ -6,6 +6,15 @@ using Microsoft.Win32.SafeHandles;
 
 namespace SysFloat.Monitoring
 {
+    internal sealed class ProcessIdentityCollectionResult
+    {
+        internal bool Available { get; set; }
+        internal bool Aborted { get; set; }
+        internal string Status { get; set; } = string.Empty;
+        internal List<ApplicationProcessSample> Samples { get; set; } = new List<ApplicationProcessSample>();
+        internal HashSet<int> VisibleOwnerlessWindowProcessIds { get; set; } = new HashSet<int>();
+    }
+
     internal sealed class ProcessMemoryCollectionResult
     {
         internal bool Available { get; set; }
@@ -24,6 +33,99 @@ namespace SysFloat.Monitoring
 
         private readonly ProcessMemoryReader _memoryReader = new ProcessMemoryReader();
         private readonly ApplicationMemoryGrouper _applicationMemoryGrouper = new ApplicationMemoryGrouper();
+
+        internal List<ProcessInfo> GroupApplicationSamples(IReadOnlyList<ApplicationProcessSample> samples,
+            ProcessMetric metric, IReadOnlyCollection<int> visibleOwnerlessWindowProcessIds)
+        {
+            return _applicationMemoryGrouper.GroupApplicationSamples(samples, metric,
+                visibleOwnerlessWindowProcessIds);
+        }
+
+        internal ProcessIdentityCollectionResult CollectApplicationIdentities(Func<bool> shouldContinue = null)
+        {
+            try
+            {
+                if (!ShouldContinue(shouldContinue))
+                    return AbortedIdentityResult();
+
+                if (!TryCaptureProcessList(out List<ProcessSnapshotEntry> processes,
+                    out bool snapshotComplete, out string snapshotStatus))
+                {
+                    return new ProcessIdentityCollectionResult
+                    {
+                        Available = false,
+                        Status = snapshotStatus
+                    };
+                }
+
+                _memoryReader.BeginCollection();
+                var activeProcessIds = new HashSet<int>();
+                var samples = new List<ApplicationProcessSample>(processes.Count);
+                foreach (ProcessSnapshotEntry process in processes)
+                {
+                    if (!ShouldContinue(shouldContinue))
+                        return AbortedIdentityResult();
+
+                    activeProcessIds.Add(process.ProcessId);
+                    ProcessMemoryReadResult identity = _memoryReader.ReadIdentity(process.ProcessId);
+                    samples.Add(new ApplicationProcessSample
+                    {
+                        ProcessId = process.ProcessId,
+                        ParentProcessId = process.ParentProcessId,
+                        ExecutableName = process.ExecutableName,
+                        ImagePath = identity.ImagePath,
+                        CreationTime = identity.CreationTime,
+                        CpuTimeTicks = identity.CpuTimeTicks,
+                        CpuMonotonicTimestamp = identity.CpuMonotonicTimestamp,
+                        CpuTimeAvailable = identity.CpuTimeAvailable
+                    });
+                }
+
+                if (!ShouldContinue(shouldContinue))
+                    return AbortedIdentityResult();
+
+                _memoryReader.PruneImagePathCache(activeProcessIds);
+                HashSet<int> visibleWindowProcessIds;
+                bool windowEnumerationSucceeded;
+                try
+                {
+                    visibleWindowProcessIds = ApplicationMemoryGrouper
+                        .FindVisibleOwnerlessWindowProcessIds(out windowEnumerationSucceeded);
+                }
+                catch
+                {
+                    visibleWindowProcessIds = new HashSet<int>();
+                    windowEnumerationSucceeded = false;
+                }
+
+                var statusParts = new List<string>();
+                if (!snapshotComplete)
+                    statusParts.Add(snapshotStatus);
+                if (!windowEnumerationSucceeded)
+                    statusParts.Add("窗口枚举不可用，应用分组可能不完整");
+
+                return new ProcessIdentityCollectionResult
+                {
+                    Available = snapshotComplete && windowEnumerationSucceeded,
+                    Status = string.Join("；", statusParts),
+                    Samples = samples,
+                    VisibleOwnerlessWindowProcessIds = visibleWindowProcessIds
+                };
+            }
+            catch
+            {
+                return new ProcessIdentityCollectionResult
+                {
+                    Available = false,
+                    Status = "进程身份采集失败"
+                };
+            }
+        }
+
+        private static ProcessIdentityCollectionResult AbortedIdentityResult()
+        {
+            return new ProcessIdentityCollectionResult { Aborted = true };
+        }
 
         internal ProcessMemoryCollectionResult Collect(Func<bool> shouldContinue = null)
         {

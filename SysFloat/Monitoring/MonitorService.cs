@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Threading;
 
@@ -8,20 +9,6 @@ namespace SysFloat.Monitoring
 {
     public class MonitorService : IDisposable
     {
-        private static readonly HashSet<string> FilteredProcesses = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "Memory Compression",
-            "Registry",
-            "smss",
-            "csrss",
-            "wininit",
-            "services",
-            "lsass",
-            "winlogon",
-            "dwm",
-            "ntoskrnl"
-        };
-
         private readonly CpuMonitor _cpuMonitor = new CpuMonitor();
         private readonly MemoryMonitor _memoryMonitor = new MemoryMonitor();
         private readonly GpuMemoryMonitor _gpuMonitor = new GpuMemoryMonitor();
@@ -186,13 +173,7 @@ namespace SysFloat.Monitoring
             switch (metric)
             {
                 case ProcessMetric.Cpu:
-                    var cpuUpdate = _processCpuTracker.Update(CollectCpuSamples(generation), generation,
-                        Environment.ProcessorCount, Stopwatch.Frequency);
-                    return new ProcessCollectionResult
-                    {
-                        Processes = cpuUpdate.Processes,
-                        Available = cpuUpdate.Available
-                    };
+                    return CollectCpuProcesses(generation);
 
                 case ProcessMetric.Vram:
                     return CollectVramProcesses(generation);
@@ -203,46 +184,75 @@ namespace SysFloat.Monitoring
             }
         }
 
-        private List<ProcessCpuSample> CollectCpuSamples(int generation)
+        private ProcessCollectionResult CollectCpuProcesses(int generation)
+        {
+            ProcessIdentityCollectionResult identities = _processMemoryCollector.CollectApplicationIdentities(
+                () => IsProcessGenerationCurrent(generation));
+            if (identities.Aborted || !IsProcessGenerationCurrent(generation))
+                return new ProcessCollectionResult();
+
+            if (!identities.Available)
+            {
+                return new ProcessCollectionResult
+                {
+                    Available = false,
+                    Status = identities.Status
+                };
+            }
+
+            var cpuSamples = CollectCpuSamples(identities.Samples, generation);
+            ProcessCpuUpdate cpuUpdate = _processCpuTracker.Update(cpuSamples, generation,
+                Environment.ProcessorCount, Stopwatch.Frequency);
+            if (!IsProcessGenerationCurrent(generation))
+                return new ProcessCollectionResult();
+
+            Dictionary<int, float> cpuByProcessId = cpuUpdate.Processes
+                .Where(process => process != null && process.CpuPercent >= 0 &&
+                    !float.IsNaN(process.CpuPercent) && !float.IsInfinity(process.CpuPercent))
+                .GroupBy(process => process.ProcessId)
+                .ToDictionary(group => group.Key, group => group.First().CpuPercent);
+
+            foreach (ApplicationProcessSample process in identities.Samples)
+            {
+                if (cpuByProcessId.TryGetValue(process.ProcessId, out float cpuPercent))
+                    process.CpuPercent = cpuPercent;
+            }
+
+            List<ProcessInfo> groups = _processMemoryCollector.GroupApplicationSamples(identities.Samples,
+                ProcessMetric.Cpu, identities.VisibleOwnerlessWindowProcessIds);
+            return new ProcessCollectionResult
+            {
+                Processes = groups.Take(5).ToList(),
+                Available = cpuUpdate.Available && groups.Count > 0
+            };
+        }
+
+        private List<ProcessCpuSample> CollectCpuSamples(IReadOnlyList<ApplicationProcessSample> identities,
+            int generation)
         {
             var samples = new List<ProcessCpuSample>();
-            Process[] processes;
-            try
-            {
-                processes = Process.GetProcesses();
-            }
-            catch
-            {
+            if (identities == null)
                 return samples;
-            }
 
-            foreach (var process in processes)
+            foreach (ApplicationProcessSample identity in identities)
             {
-                try
-                {
-                    if (!IsProcessGenerationCurrent(generation))
-                        continue;
+                if (!IsProcessGenerationCurrent(generation))
+                    break;
 
-                    string name = process.ProcessName;
-                    if (FilteredProcesses.Contains(name))
-                        continue;
+                string name = Path.GetFileNameWithoutExtension(identity.ExecutableName ?? string.Empty);
+                if (string.IsNullOrWhiteSpace(name) ||
+                    identity.CreationTime == 0 || !identity.CpuTimeAvailable ||
+                    identity.CpuMonotonicTimestamp <= 0 || identity.CpuTimeTicks < 0)
+                    continue;
 
-                    DateTime startTime = process.StartTime.ToUniversalTime();
-                    long processorTimeTicks = process.TotalProcessorTime.Ticks;
-                    samples.Add(new ProcessCpuSample
-                    {
-                        ProcessId = process.Id,
-                        Name = name,
-                        StartTimeTicks = startTime.Ticks,
-                        TotalProcessorTimeTicks = processorTimeTicks,
-                        MonotonicTimestamp = Stopwatch.GetTimestamp()
-                    });
-                }
-                catch { }
-                finally
+                samples.Add(new ProcessCpuSample
                 {
-                    process.Dispose();
-                }
+                    ProcessId = identity.ProcessId,
+                    Name = name,
+                    StartTimeTicks = unchecked((long)identity.CreationTime),
+                    TotalProcessorTimeTicks = identity.CpuTimeTicks,
+                    MonotonicTimestamp = identity.CpuMonotonicTimestamp
+                });
             }
 
             return samples;
@@ -263,45 +273,29 @@ namespace SysFloat.Monitoring
         private ProcessCollectionResult CollectVramProcesses(int generation)
         {
             ProcessVramSample sample = _processVramMonitor.ReadUsageByProcess(generation);
-            var processes = new List<ProcessInfo>();
+            if (!sample.Available)
+                return new ProcessCollectionResult { Available = false, Status = sample.Status };
 
-            if (sample.Available)
+            ProcessIdentityCollectionResult identities = _processMemoryCollector.CollectApplicationIdentities(
+                () => IsProcessGenerationCurrent(generation));
+            if (identities.Aborted || !IsProcessGenerationCurrent(generation))
+                return new ProcessCollectionResult();
+            if (!identities.Available)
+                return new ProcessCollectionResult { Available = false, Status = identities.Status };
+
+            foreach (ApplicationProcessSample process in identities.Samples)
             {
-                foreach (var usage in sample.UsageByProcessId)
-                {
-                    if (!IsProcessGenerationCurrent(generation))
-                        break;
-
-                    try
-                    {
-                        using (Process process = Process.GetProcessById(usage.Key))
-                        {
-                            processes.Add(new ProcessInfo
-                            {
-                                ProcessId = usage.Key,
-                                Name = process.ProcessName,
-                                VramBytes = usage.Value
-                            });
-                        }
-                    }
-                    catch { }
-                }
+                if (sample.UsageByProcessId.TryGetValue(process.ProcessId, out ulong bytes))
+                    process.VramBytes = bytes;
             }
 
-            processes = processes
-                .OrderByDescending(process => process.VramBytes)
-                .ThenBy(process => process.Name, StringComparer.OrdinalIgnoreCase)
-                .Take(5)
-                .ToList();
-
-            string status = sample.Status;
-            if (sample.Available && processes.Count == 0)
-                status = ProcessVramMonitor.EmptyStatus;
-
+            List<ProcessInfo> groups = _processMemoryCollector.GroupApplicationSamples(identities.Samples,
+                ProcessMetric.Vram, identities.VisibleOwnerlessWindowProcessIds);
+            string status = groups.Count == 0 ? ProcessVramMonitor.EmptyStatus : sample.Status;
             return new ProcessCollectionResult
             {
-                Processes = processes,
-                Available = sample.Available,
+                Processes = groups.Take(5).ToList(),
+                Available = true,
                 Status = status
             };
         }

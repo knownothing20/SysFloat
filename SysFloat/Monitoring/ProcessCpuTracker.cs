@@ -78,16 +78,15 @@ namespace SysFloat.Monitoring
                 }
 
                 _previous = next;
-                var top = ranked
+                var allProcesses = ranked
                     .OrderByDescending(process => process.CpuPercent)
                     .ThenBy(process => process.Name, StringComparer.OrdinalIgnoreCase)
-                    .Take(5)
                     .ToList();
 
                 return new ProcessCpuUpdate
                 {
                     Available = ranked.Count > 0,
-                    Processes = top
+                    Processes = allProcesses
                 };
             }
         }

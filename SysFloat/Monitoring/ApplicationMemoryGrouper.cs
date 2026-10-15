@@ -34,7 +34,6 @@ namespace SysFloat.Monitoring
     {
         private const int MaximumCachedApplicationNames = 256;
         private const int GwOwner = 4;
-        private static readonly string SystemExplorerPath = GetSystemExplorerPath();
         private readonly Dictionary<string, string> _applicationNameCache =
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private readonly Queue<string> _applicationNameCacheOrder = new Queue<string>();
@@ -42,7 +41,19 @@ namespace SysFloat.Monitoring
         internal List<ProcessInfo> Group(IReadOnlyList<ProcessMemoryProcessSample> samples,
             IReadOnlyCollection<int> visibleOwnerlessWindowProcessIds)
         {
-            return GroupSamples(samples, visibleOwnerlessWindowProcessIds, ResolveApplicationName);
+            var applicationSamples = new List<ApplicationProcessSample>(samples?.Count ?? 0);
+            if (samples != null)
+                foreach (var sample in samples)
+                    if (sample != null) applicationSamples.Add(ToApplicationSample(sample));
+            return GroupApplicationSamples(applicationSamples, ProcessMetric.Memory,
+                visibleOwnerlessWindowProcessIds);
+        }
+
+        internal List<ProcessInfo> GroupApplicationSamples(IReadOnlyList<ApplicationProcessSample> samples,
+            ProcessMetric metric, IReadOnlyCollection<int> visibleOwnerlessWindowProcessIds)
+        {
+            return ApplicationProcessGrouper.GroupSamples(samples, metric,
+                visibleOwnerlessWindowProcessIds, ResolveApplicationName);
         }
 
         internal static List<ProcessInfo> GroupSamples(IReadOnlyList<ProcessMemoryProcessSample> samples,
@@ -52,49 +63,39 @@ namespace SysFloat.Monitoring
             if (samples == null || samples.Count == 0)
                 return new List<ProcessInfo>();
 
-            var processById = new Dictionary<int, ProcessMemoryProcessSample>();
-            foreach (ProcessMemoryProcessSample sample in samples)
-            {
-                if (sample != null && sample.ProcessId > 0 && !processById.ContainsKey(sample.ProcessId))
-                    processById.Add(sample.ProcessId, sample);
-            }
-
-            var visibleIds = visibleOwnerlessWindowProcessIds == null
-                ? new HashSet<int>()
-                : new HashSet<int>(visibleOwnerlessWindowProcessIds);
-            var groups = new Dictionary<string, GroupAccumulator>(StringComparer.OrdinalIgnoreCase);
-
-            foreach (ProcessMemoryProcessSample sample in processById.Values.OrderBy(item => item.ProcessId))
-            {
-                ProcessMemoryProcessSample applicationRoot = FindNearestVisibleApplicationRoot(
-                    sample, processById, visibleIds);
-                ProcessMemoryProcessSample identitySource = applicationRoot ?? sample;
-                string normalizedPath = NormalizeExecutablePath(identitySource.ImagePath);
-                string groupKey = normalizedPath != null
-                    ? "path:" + normalizedPath
-                    : "pid:" + identitySource.ProcessId + ":" + identitySource.CreationTime;
-
-                if (!groups.TryGetValue(groupKey, out GroupAccumulator group))
-                {
-                    string name = applicationNameResolver?.Invoke(identitySource);
-                    if (string.IsNullOrWhiteSpace(name))
-                        name = GetExecutableBaseName(identitySource.ExecutableName, identitySource.ImagePath);
-
-                    group = new GroupAccumulator(name, identitySource.ProcessId);
-                    groups.Add(groupKey, group);
-                }
-
-                bool identityPartial = normalizedPath == null;
-                group.Add(sample, identitySource.ProcessId, identityPartial);
-            }
-
-            return groups.Values
-                .Where(group => group.HasReadableData)
-                .Select(group => group.ToProcessInfo())
-                .OrderByDescending(process => process.MemoryBytes)
-                .ThenBy(process => process.Name, StringComparer.OrdinalIgnoreCase)
-                .ThenBy(process => process.ProcessId)
+            var originalById = samples.Where(sample => sample != null && sample.ProcessId > 0)
+                .GroupBy(sample => sample.ProcessId)
+                .ToDictionary(group => group.Key, group => group.First());
+            List<ApplicationProcessSample> applicationSamples = samples
+                .Where(sample => sample != null)
+                .Select(ToApplicationSample)
                 .ToList();
+
+            return ApplicationProcessGrouper.GroupSamples(applicationSamples, ProcessMetric.Memory,
+                visibleOwnerlessWindowProcessIds, identity =>
+                {
+                    return identity != null && originalById.TryGetValue(identity.ProcessId,
+                        out ProcessMemoryProcessSample original)
+                        ? applicationNameResolver?.Invoke(original)
+                        : null;
+                });
+        }
+
+        private static ApplicationProcessSample ToApplicationSample(ProcessMemoryProcessSample sample)
+        {
+            if (sample == null)
+                return null;
+
+            return new ApplicationProcessSample
+            {
+                ProcessId = sample.ProcessId,
+                ParentProcessId = sample.ParentProcessId,
+                ExecutableName = sample.ExecutableName,
+                ImagePath = sample.ImagePath,
+                CreationTime = sample.CreationTime,
+                MemoryBytes = sample.PrivateWorkingSetBytes,
+                MemoryAvailable = sample.PrivateWorkingSetAvailable
+            };
         }
 
         internal static HashSet<int> FindVisibleOwnerlessWindowProcessIds(out bool enumerationSucceeded)
@@ -116,7 +117,7 @@ namespace SysFloat.Monitoring
             return processIds;
         }
 
-        private string ResolveApplicationName(ProcessMemoryProcessSample process)
+        private string ResolveApplicationName(ApplicationProcessSample process)
         {
             string normalizedPath = NormalizeExecutablePath(process.ImagePath);
             if (normalizedPath == null)
@@ -153,63 +154,6 @@ namespace SysFloat.Monitoring
             return name;
         }
 
-        private static ProcessMemoryProcessSample FindNearestVisibleApplicationRoot(
-            ProcessMemoryProcessSample process,
-            IReadOnlyDictionary<int, ProcessMemoryProcessSample> processById,
-            ISet<int> visibleIds)
-        {
-            var visited = new HashSet<int>();
-            ProcessMemoryProcessSample current = process;
-
-            while (current != null && visited.Add(current.ProcessId))
-            {
-                if (IsExplorerShell(current))
-                    break;
-
-                if (visibleIds.Contains(current.ProcessId))
-                    return current;
-
-                if (current.ParentProcessId <= 0 || current.ParentProcessId == current.ProcessId ||
-                    !processById.TryGetValue(current.ParentProcessId, out ProcessMemoryProcessSample parent))
-                    break;
-
-                // Toolhelp parent IDs can be recycled. Only follow an edge when the sampled
-                // parent identity predates the child, as a real process parent must.
-                if (current.CreationTime == 0 || parent.CreationTime == 0 ||
-                    parent.CreationTime > current.CreationTime)
-                    break;
-
-                current = parent;
-            }
-
-            return null;
-        }
-
-        private static bool IsExplorerShell(ProcessMemoryProcessSample process)
-        {
-            if (string.IsNullOrWhiteSpace(process.ImagePath) || string.IsNullOrWhiteSpace(SystemExplorerPath))
-                return false;
-
-            string processPath = NormalizeExecutablePath(process.ImagePath);
-            return processPath != null && string.Equals(processPath, SystemExplorerPath,
-                StringComparison.OrdinalIgnoreCase);
-        }
-
-        private static string GetSystemExplorerPath()
-        {
-            try
-            {
-                string windowsPath = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
-                return string.IsNullOrWhiteSpace(windowsPath)
-                    ? null
-                    : NormalizeExecutablePath(Path.Combine(windowsPath, "explorer.exe"));
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
         private static string NormalizeExecutablePath(string path)
         {
             if (string.IsNullOrWhiteSpace(path))
@@ -240,55 +184,6 @@ namespace SysFloat.Monitoring
             catch
             {
                 return source.Trim();
-            }
-        }
-
-        private sealed class GroupAccumulator
-        {
-            private ulong _memoryBytes;
-            private int _processCount;
-            private bool _isPartial;
-            private bool _hasReadableData;
-            private int _representativeProcessId;
-
-            public GroupAccumulator(string name, int representativeProcessId)
-            {
-                Name = name ?? string.Empty;
-                _representativeProcessId = representativeProcessId;
-            }
-
-            public string Name { get; }
-            public bool HasReadableData => _hasReadableData;
-
-            public void Add(ProcessMemoryProcessSample sample, int rootProcessId, bool identityPartial)
-            {
-                _processCount++;
-                _representativeProcessId = Math.Min(_representativeProcessId, rootProcessId);
-                _isPartial |= identityPartial;
-
-                if (sample.PrivateWorkingSetAvailable)
-                {
-                    _hasReadableData = true;
-                    _memoryBytes = ulong.MaxValue - _memoryBytes < sample.PrivateWorkingSetBytes
-                        ? ulong.MaxValue
-                        : _memoryBytes + sample.PrivateWorkingSetBytes;
-                }
-                else
-                {
-                    _isPartial = true;
-                }
-            }
-
-            public ProcessInfo ToProcessInfo()
-            {
-                return new ProcessInfo
-                {
-                    ProcessId = _representativeProcessId,
-                    ProcessCount = _processCount,
-                    MemoryIsPartial = _isPartial,
-                    Name = Name,
-                    MemoryBytes = _memoryBytes
-                };
             }
         }
 

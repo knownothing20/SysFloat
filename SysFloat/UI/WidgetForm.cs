@@ -233,7 +233,7 @@ namespace SysFloat.UI
             _contextMenu.Items.Add(new ToolStripSeparator());
 
             var aboutItem = new ToolStripMenuItem("关于");
-            aboutItem.Click += (s, e) => MessageBox.Show("SysFloat v1.2\n轻量级系统监控悬浮窗", "关于 SysFloat",
+            aboutItem.Click += (s, e) => MessageBox.Show("SysFloat v1.2.1\n轻量级系统监控悬浮窗", "关于 SysFloat",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
             _contextMenu.Items.Add(aboutItem);
 

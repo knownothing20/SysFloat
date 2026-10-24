@@ -172,8 +172,10 @@ release\              本地发布输出（不进 git）
 backup\               本机历史版本备份（不进 git）
 local\                私有内容：内部开发记录等（不进 git，见下方隐私说明）
 docs\                 公开文档与截图
-tools\                publish.bat、privacy-check.ps1 等工具
+tools\                publish.bat、deploy.ps1、privacy-check.ps1 等工具
 ```
+
+本机开发约定：根目录 `SysFloat.exe` 始终部署为最新构建——运行 `tools\deploy.ps1` 一键完成"发布 → 备份旧版 → 替换 → 重启 → 自检"，并在 `local\deploy-log.txt` 留下版本、git 提交与哈希记录。
 
 安装匹配的 .NET SDK 后，在仓库根目录运行：
 

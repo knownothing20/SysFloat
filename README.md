@@ -12,13 +12,13 @@
 
 ## 下载和使用
 
-前往 [Releases](https://github.com/knownothing20/SysFloat/releases/latest) 下载，两种附件内容相同：
+前往 [Releases](https://github.com/knownothing20/SysFloat/releases/latest) 下载，两种附件功能完全相同：
 
-- **`SysFloat-v1.x.x.zip`（约 60 MB，推荐）**：解压得到 `SysFloat.exe`，保存到任意可写目录运行。
-- **`SysFloat.exe`（约 146 MB）**：免解压直链；体积大是因为内置了整套 .NET 运行时。
+- **`SysFloat-v1.x.x.zip`（约 45 MB，推荐）**：解压得到一个 `SysFloat` **文件夹**，整个文件夹放到任意可写位置，双击文件夹里的 `SysFloat.exe` 运行。请保持文件夹完整，不要单独把 exe 拷出去。体积说明：其中约 99% 是随包携带的 .NET 运行时（免安装、任何 64 位 Windows 直接运行），已剔除本项目用不到的 WPF 组件。
+- **`SysFloat.exe`（约 146 MB）**：免解压单文件直链，放哪都能跑；体积更大是因为单文件模式无法剔除未用组件。
 
 - 适用于 **64 位 Windows**。
-- 发布版为 **win-x64 自包含单文件**，不需要额外安装 .NET；文件大小不等于运行内存占用（实际运行私有内存约 45 MB）。
+- 两种附件都是 **win-x64 自包含**，不需要额外安装 .NET；文件大小不等于运行内存占用（实际运行私有内存约 40 MB）。
 - 每个附件同时提供 SHA-256 校验文件。
 - 程序未签名，首次运行时 Windows 可能显示安全提示；请核对下载来源和校验值。
 

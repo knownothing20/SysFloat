@@ -44,7 +44,7 @@ namespace SysFloat.Monitoring
 
             float[] values = { snapshot.CpuPercent, snapshot.MemoryPercent,
                 snapshot.VramAvailable ? snapshot.VramPercent : -1 };
-            string[] names = { "CPU", "内存", "显存" };
+            string[] names = { "CPU", UIStrings.Get("alert.metric.ram"), UIStrings.Get("alert.metric.vram") };
             var active = new List<string>();
             int mask = 0;
             long duration = settings.HighLoadDurationSeconds * 1000L;
@@ -72,7 +72,7 @@ namespace SysFloat.Monitoring
             bool justActivated = isActive && !_wasActive;
             _wasActive = isActive;
             string message = isActive
-                ? string.Join(" / ", active) + $"，持续至少 {settings.HighLoadDurationSeconds} 秒"
+                ? string.Join(" / ", active) + UIStrings.Format("alert.suffix", settings.HighLoadDurationSeconds)
                 : string.Empty;
             return new AlertEvaluation(isActive, justActivated, message, mask);
         }

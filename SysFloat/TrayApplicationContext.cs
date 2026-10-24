@@ -31,6 +31,7 @@ namespace SysFloat
             _settingsStore = settingsStore ?? new SettingsStore();
             _settings = _settingsStore.Load();
             _settings.Normalize();
+            UIStrings.SetLanguage(_settings.Language);
             _monitorService = new MonitorService();
 
             CreateIcons();
@@ -100,129 +101,85 @@ namespace SysFloat
             _notifyIcon.ContextMenuStrip = CreateTrayMenu();
         }
 
+        private ToolStripMenuItem TrayMenuItem(string key, EventHandler onClick)
+        {
+            var item = new ToolStripMenuItem(UIStrings.Get(key)) { Tag = key };
+            if (onClick != null) item.Click += onClick;
+            return item;
+        }
+
         private ContextMenuStrip CreateTrayMenu()
         {
             var menu = new ContextMenuStrip();
             menu.Renderer = new DarkMenuRenderer();
 
-            var showItem = new ToolStripMenuItem("显示悬浮窗");
-            showItem.Click += (s, e) => _widgetForm.ShowWidget();
-            menu.Items.Add(showItem);
-
+            menu.Items.Add(TrayMenuItem("menu.show", (s, e) => _widgetForm.ShowWidget()));
             menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add(TrayMenuItem("menu.horizontal", (s, e) => _widgetForm.ApplyLayout(WidgetLayout.Horizontal)));
+            menu.Items.Add(TrayMenuItem("menu.vertical", (s, e) => _widgetForm.ApplyLayout(WidgetLayout.Vertical)));
+            menu.Items.Add(TrayMenuItem("menu.expanded", (s, e) => _widgetForm.ApplyLayout(WidgetLayout.Expanded)));
+            menu.Items.Add(TrayMenuItem("menu.mini", (s, e) => _widgetForm.ApplyLayout(WidgetLayout.Mini)));
 
-            var horizontalItem = new ToolStripMenuItem("横版");
-            horizontalItem.Click += (s, e) => _widgetForm.ApplyLayout(WidgetLayout.Horizontal);
-            menu.Items.Add(horizontalItem);
-
-            var verticalItem = new ToolStripMenuItem("竖版");
-            verticalItem.Click += (s, e) => _widgetForm.ApplyLayout(WidgetLayout.Vertical);
-            menu.Items.Add(verticalItem);
-
-            var expandedItem = new ToolStripMenuItem("展开版");
-            expandedItem.Click += (s, e) => _widgetForm.ApplyLayout(WidgetLayout.Expanded);
-            menu.Items.Add(expandedItem);
-
-            var miniItem = new ToolStripMenuItem("迷你版");
-            miniItem.Click += (s, e) => _widgetForm.ApplyLayout(WidgetLayout.Mini);
-            menu.Items.Add(miniItem);
-
-            var sizeMenu = new ToolStripMenuItem("大小");
-            var trayScale75 = new ToolStripMenuItem("75%");
-            trayScale75.Click += (s, e) => { _widgetForm.ApplyScale(75); UpdateTrayMenuChecks(menu); };
-            sizeMenu.DropDownItems.Add(trayScale75);
-            var trayScale100 = new ToolStripMenuItem("100%");
-            trayScale100.Click += (s, e) => { _widgetForm.ApplyScale(100); UpdateTrayMenuChecks(menu); };
-            sizeMenu.DropDownItems.Add(trayScale100);
-            var trayScale125 = new ToolStripMenuItem("125%");
-            trayScale125.Click += (s, e) => { _widgetForm.ApplyScale(125); UpdateTrayMenuChecks(menu); };
-            sizeMenu.DropDownItems.Add(trayScale125);
-            var trayScale150 = new ToolStripMenuItem("150%");
-            trayScale150.Click += (s, e) => { _widgetForm.ApplyScale(150); UpdateTrayMenuChecks(menu); };
-            sizeMenu.DropDownItems.Add(trayScale150);
+            var sizeMenu = TrayMenuItem("menu.size", null);
+            sizeMenu.DropDownItems.Add(TrayMenuItem("menu.scale75", (s, e) => { _widgetForm.ApplyScale(75); UpdateTrayMenuChecks(menu); }));
+            sizeMenu.DropDownItems.Add(TrayMenuItem("menu.scale100", (s, e) => { _widgetForm.ApplyScale(100); UpdateTrayMenuChecks(menu); }));
+            sizeMenu.DropDownItems.Add(TrayMenuItem("menu.scale125", (s, e) => { _widgetForm.ApplyScale(125); UpdateTrayMenuChecks(menu); }));
+            sizeMenu.DropDownItems.Add(TrayMenuItem("menu.scale150", (s, e) => { _widgetForm.ApplyScale(150); UpdateTrayMenuChecks(menu); }));
             sizeMenu.DropDownItems.Add(new ToolStripSeparator());
-            var trayScaleHint = new ToolStripMenuItem("提示：Ctrl+滚轮 微调大小");
+            var trayScaleHint = TrayMenuItem("menu.sizeHint", null);
             trayScaleHint.Enabled = false;
             sizeMenu.DropDownItems.Add(trayScaleHint);
             menu.Items.Add(sizeMenu);
 
             menu.Items.Add(new ToolStripSeparator());
 
-            var topMostItem = new ToolStripMenuItem("始终置顶");
-            topMostItem.Click += (s, e) =>
+            menu.Items.Add(TrayMenuItem("menu.topMost", (s, e) =>
             {
                 _widgetForm.SetTopMost(!_settings.AlwaysOnTop);
                 UpdateTrayMenuChecks(menu);
-            };
-            menu.Items.Add(topMostItem);
-
-            var lockItem = new ToolStripMenuItem("锁定位置");
-            lockItem.Click += (s, e) =>
+            }));
+            menu.Items.Add(TrayMenuItem("menu.lock", (s, e) =>
             {
                 _settings.Locked = !_settings.Locked;
                 _settingsStore.Save(_settings);
                 _widgetForm.UpdateMenuChecks();
                 UpdateTrayMenuChecks(menu);
-            };
-            menu.Items.Add(lockItem);
-
-            var snapItem = new ToolStripMenuItem("边缘吸附");
-            snapItem.Click += (s, e) =>
+            }));
+            menu.Items.Add(TrayMenuItem("menu.snap", (s, e) =>
             {
                 _settings.SnapToEdges = !_settings.SnapToEdges;
                 _settingsStore.Save(_settings);
                 _widgetForm.UpdateMenuChecks();
                 UpdateTrayMenuChecks(menu);
-            };
-            menu.Items.Add(snapItem);
-
-            var trayAutoStart = new ToolStripMenuItem("开机自启");
-            trayAutoStart.Click += (s, e) =>
+            }));
+            menu.Items.Add(TrayMenuItem("menu.autoStart", (s, e) =>
             {
                 StartupRegistration.SetEnabled(!StartupRegistration.IsEnabled());
                 _widgetForm.UpdateMenuChecks();
                 UpdateTrayMenuChecks(menu);
-            };
-            menu.Items.Add(trayAutoStart);
-
-            var edgeHideItem = new ToolStripMenuItem("贴边隐藏");
-            edgeHideItem.Click += (s, e) =>
+            }));
+            menu.Items.Add(TrayMenuItem("menu.edgeHide", (s, e) =>
             {
                 _widgetForm.SetEdgeAutoHide(!_settings.EdgeAutoHide);
                 UpdateTrayMenuChecks(menu);
-            };
-            menu.Items.Add(edgeHideItem);
+            }));
 
             menu.Items.Add(new ToolStripSeparator());
 
-            var op100 = new ToolStripMenuItem("背景不透明");
-            op100.Click += (s, e) => { _widgetForm.SetOpacity(WidgetOpacity.Opaque); UpdateTrayMenuChecks(menu); };
-            menu.Items.Add(op100);
-
-            var op75 = new ToolStripMenuItem("背景 75%");
-            op75.Click += (s, e) => { _widgetForm.SetOpacity(WidgetOpacity.Percent75); UpdateTrayMenuChecks(menu); };
-            menu.Items.Add(op75);
-
-            var op50 = new ToolStripMenuItem("背景 50%");
-            op50.Click += (s, e) => { _widgetForm.SetOpacity(WidgetOpacity.Percent50); UpdateTrayMenuChecks(menu); };
-            menu.Items.Add(op50);
+            menu.Items.Add(TrayMenuItem("menu.opacityOpaque", (s, e) => { _widgetForm.SetOpacity(WidgetOpacity.Opaque); UpdateTrayMenuChecks(menu); }));
+            menu.Items.Add(TrayMenuItem("menu.opacity75", (s, e) => { _widgetForm.SetOpacity(WidgetOpacity.Percent75); UpdateTrayMenuChecks(menu); }));
+            menu.Items.Add(TrayMenuItem("menu.opacity50", (s, e) => { _widgetForm.SetOpacity(WidgetOpacity.Percent50); UpdateTrayMenuChecks(menu); }));
 
             menu.Items.Add(new ToolStripSeparator());
 
-            var monitoringItem = new ToolStripMenuItem("监控设置…");
-            monitoringItem.Click += (s, e) => ShowMonitoringOptions();
-            menu.Items.Add(monitoringItem);
+            menu.Items.Add(TrayMenuItem("menu.monitorSettings", (s, e) => ShowMonitoringOptions()));
 
             menu.Items.Add(new ToolStripSeparator());
 
-            var aboutItem = new ToolStripMenuItem("关于");
-            aboutItem.Click += (s, e) => MessageBox.Show("SysFloat v1.2.1\n轻量级系统监控悬浮窗",
-                "关于 SysFloat", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            menu.Items.Add(aboutItem);
-
-            var exitItem = new ToolStripMenuItem("退出");
-            exitItem.Click += OnExitClick;
-            menu.Items.Add(exitItem);
+            menu.Items.Add(TrayMenuItem("menu.about", (s, e) => MessageBox.Show(
+                "SysFloat v1.2.2\n" + UIStrings.Get("about.body"), UIStrings.Get("about.title"),
+                MessageBoxButtons.OK, MessageBoxIcon.Information)));
+            menu.Items.Add(TrayMenuItem("menu.exit", OnExitClick));
 
             menu.Opening += (s, e) => UpdateTrayMenuChecks(menu);
 
@@ -240,43 +197,55 @@ namespace SysFloat
             {
                 if (items[i] is ToolStripMenuItem item)
                 {
-                    string baseText = item.Text.Replace("● ", "");
-                    if (baseText == "横版")
-                        item.Checked = _widgetForm.GetCurrentLayout() == WidgetLayout.Horizontal;
-                    else if (baseText == "竖版")
-                        item.Checked = _widgetForm.GetCurrentLayout() == WidgetLayout.Vertical;
-                    else if (baseText == "展开版")
-                        item.Checked = _widgetForm.GetCurrentLayout() == WidgetLayout.Expanded;
-                    else if (baseText == "迷你版")
-                        item.Checked = _widgetForm.GetCurrentLayout() == WidgetLayout.Mini;
-                    else if (baseText == "始终置顶")
-                        item.Checked = _settings.AlwaysOnTop;
-                    else if (baseText == "锁定位置")
-                        item.Checked = _settings.Locked;
-                    else if (baseText == "边缘吸附")
-                        item.Checked = _settings.SnapToEdges;
-                    else if (baseText == "贴边隐藏")
-                        item.Checked = _settings.EdgeAutoHide;
-                    else if (baseText == "开机自启")
-                        item.Checked = StartupRegistration.IsEnabled();
-                    else if (baseText == "背景不透明")
-                        item.Checked = _settings.Opacity == WidgetOpacity.Opaque;
-                    else if (baseText == "背景 75%")
-                        item.Checked = _settings.Opacity == WidgetOpacity.Percent75;
-                    else if (baseText == "背景 50%")
-                        item.Checked = _settings.Opacity == WidgetOpacity.Percent50;
-                    else if (baseText == "75%")
-                        item.Checked = _settings.ScalePercent == 75;
-                    else if (baseText == "100%")
-                        item.Checked = _settings.ScalePercent == 100;
-                    else if (baseText == "125%")
-                        item.Checked = _settings.ScalePercent == 125;
-                    else if (baseText == "150%")
-                        item.Checked = _settings.ScalePercent == 150;
+                    if (item.Tag is string key)
+                    {
+                        bool isChecked;
+                        switch (key)
+                        {
+                            case "menu.horizontal": isChecked = _widgetForm.GetCurrentLayout() == WidgetLayout.Horizontal; break;
+                            case "menu.vertical": isChecked = _widgetForm.GetCurrentLayout() == WidgetLayout.Vertical; break;
+                            case "menu.expanded": isChecked = _widgetForm.GetCurrentLayout() == WidgetLayout.Expanded; break;
+                            case "menu.mini": isChecked = _widgetForm.GetCurrentLayout() == WidgetLayout.Mini; break;
+                            case "menu.topMost": isChecked = _settings.AlwaysOnTop; break;
+                            case "menu.lock": isChecked = _settings.Locked; break;
+                            case "menu.snap": isChecked = _settings.SnapToEdges; break;
+                            case "menu.edgeHide": isChecked = _settings.EdgeAutoHide; break;
+                            case "menu.autoStart": isChecked = StartupRegistration.IsEnabled(); break;
+                            case "menu.opacityOpaque": isChecked = _settings.Opacity == WidgetOpacity.Opaque; break;
+                            case "menu.opacity75": isChecked = _settings.Opacity == WidgetOpacity.Percent75; break;
+                            case "menu.opacity50": isChecked = _settings.Opacity == WidgetOpacity.Percent50; break;
+                            case "menu.scale75": isChecked = _settings.ScalePercent == 75; break;
+                            case "menu.scale100": isChecked = _settings.ScalePercent == 100; break;
+                            case "menu.scale125": isChecked = _settings.ScalePercent == 125; break;
+                            case "menu.scale150": isChecked = _settings.ScalePercent == 150; break;
+                            default: isChecked = false; break;
+                        }
+                        item.Checked = isChecked;
+                        item.Text = isChecked ? "● " + UIStrings.Get(key) : UIStrings.Get(key);
+                    }
                     if (item.DropDownItems.Count > 0)
                         UpdateTrayItemsChecks(item.DropDownItems);
                 }
             }
+        }
+
+        /// <summary>语言切换后刷新托盘菜单文本（悬浮窗菜单由 WidgetForm 自行刷新）。</summary>
+        private void RefreshTrayLanguage()
+        {
+            if (_notifyIcon?.ContextMenuStrip == null) return;
+            void Apply(ToolStripItemCollection items)
+            {
+                foreach (ToolStripItem entry in items)
+                {
+                    if (entry is ToolStripMenuItem item)
+                    {
+                        if (item.Tag is string key) item.Text = UIStrings.Get(key);
+                        if (item.DropDownItems.Count > 0) Apply(item.DropDownItems);
+                    }
+                }
+            }
+            Apply(_notifyIcon.ContextMenuStrip.Items);
+            UpdateTrayMenuChecks(_notifyIcon.ContextMenuStrip);
         }
 
         private void CreateWidgetForm()
@@ -297,6 +266,12 @@ namespace SysFloat
                 if (dialog.ShowDialog() != DialogResult.OK) return;
             }
             _settingsStore.Save(_settings);
+            if (UIStrings.Language != _settings.Language)
+            {
+                UIStrings.SetLanguage(_settings.Language);
+                _widgetForm.RefreshLanguage();
+                RefreshTrayLanguage();
+            }
             _alertTracker.Reset();
             _notifyIcon.Icon = _normalIcon;
             _widgetForm.SetAlertState(new AlertEvaluation(false, false, string.Empty));
@@ -342,7 +317,7 @@ namespace SysFloat
                 (_lastPopupAt < 0 || now - _lastPopupAt >= 300000))
             {
                 _lastPopupAt = now;
-                _notifyIcon.ShowBalloonTip(5000, "SysFloat · 高占用提醒", alert.Message, ToolTipIcon.Warning);
+                _notifyIcon.ShowBalloonTip(5000, UIStrings.Get("alert.title"), alert.Message, ToolTipIcon.Warning);
             }
         }
 

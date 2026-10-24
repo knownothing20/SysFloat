@@ -37,10 +37,10 @@ namespace SysFloat.UI
         {
             switch (zone)
             {
-                case ClockTimeZone.Beijing: return "北京";
-                case ClockTimeZone.Utc: return "UTC";
-                case ClockTimeZone.Local: return "本机";
-                default: return "太平洋";
+                case ClockTimeZone.Beijing: return UIStrings.Get("zone.beijing");
+                case ClockTimeZone.Utc: return UIStrings.Get("zone.utc");
+                case ClockTimeZone.Local: return UIStrings.Get("zone.local");
+                default: return UIStrings.Get("zone.pacific");
             }
         }
 
@@ -71,16 +71,19 @@ namespace SysFloat.UI
         public static string FormatDate(DateTime utc, ClockTimeZone zone) =>
             GetTime(utc, zone).ToString("MM/dd", CultureInfo.InvariantCulture);
 
-        public static string FormatFullDate(DateTime utc, ClockTimeZone zone) =>
-            GetTime(utc, zone).ToString("yyyy年M月d日 dddd", CultureInfo.GetCultureInfo("zh-CN"));
+        public static string FormatFullDate(DateTime utc, ClockTimeZone zone)
+        {
+            DateTime time = GetTime(utc, zone);
+            return UIStrings.Language == UILanguage.English
+                ? time.ToString("dddd, MMMM d, yyyy", CultureInfo.InvariantCulture)
+                : time.ToString("yyyy年M月d日 dddd", CultureInfo.GetCultureInfo("zh-CN"));
+        }
 
         /// <summary>竖版时钟完整副标题（含时区名）；窄面板放不下时用紧凑版。</summary>
         public static string GetSubtitleFull(DateTime utc, ClockTimeZone zone) =>
-            zone == ClockTimeZone.Pacific
-                ? "太平洋 " + PacificClock.GetAbbreviation(utc) + " " + FormatDate(utc, zone)
-                : GetZoneName(zone) + " " + GetShortZone(utc, zone) + " " + FormatDate(utc, zone);
+            GetZoneName(zone) + " " + GetShortZone(utc, zone) + " " + FormatDate(utc, zone);
 
-        /// <summary>竖版时钟紧凑副标题。</summary>
+        /// <summary>竖版时钟紧凑副标题；太平洋不带地名前缀（窄面板放不下）。</summary>
         public static string GetSubtitleCompact(DateTime utc, ClockTimeZone zone) =>
             zone == ClockTimeZone.Pacific
                 ? PacificClock.GetAbbreviation(utc) + " " + FormatDate(utc, zone)
@@ -88,9 +91,7 @@ namespace SysFloat.UI
 
         /// <summary>横版时钟副标题。</summary>
         public static string GetSubtitleWide(DateTime utc, ClockTimeZone zone) =>
-            zone == ClockTimeZone.Pacific
-                ? "太平洋  " + PacificClock.GetAbbreviation(utc) + "  " + FormatDate(utc, zone)
-                : GetZoneName(zone) + "  " + FormatDate(utc, zone);
+            GetZoneName(zone) + "  " + GetShortZone(utc, zone) + "  " + FormatDate(utc, zone);
 
         /// <summary>展开版头部的位置标签。</summary>
         public static string GetHeaderLabel(DateTime utc, ClockTimeZone zone) =>

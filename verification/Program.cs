@@ -41,6 +41,7 @@ internal static class Program
             VerifySliverEdgeAndIdleRepaints();
             VerifyVerticalClockSingleLine();
             VerifyClockZoneDisplay();
+            VerifyLanguageDisplay();
             VerifyTrayWiring();
             Console.WriteLine($"PASS {_passed} checks. Evidence: {Output}");
             return 0;
@@ -611,6 +612,58 @@ internal static class Program
         finally
         {
             WidgetRenderer.ClockZone = ClockTimeZone.Pacific;
+        }
+    }
+
+    private static void VerifyLanguageDisplay()
+    {
+        bool systemChinese = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "zh";
+        Check(AppSettings.DetectDefaultLanguage() == (systemChinese ? UILanguage.Chinese : UILanguage.English),
+            "默认语言按系统界面语言自动检测（中文系统→中文，其余→英文）");
+
+        var langStore = new SettingsStore(Path.Combine(Output, "language-test-settings.json"));
+        langStore.Save(new AppSettings { Language = UILanguage.English });
+        Check(langStore.Load().Language == UILanguage.English,
+            "语言设置经实际 SettingsStore 保存加载后原样保留");
+        var invalidLang = new AppSettings { Language = (UILanguage)9 };
+        invalidLang.Normalize();
+        Check(invalidLang.Language == AppSettings.DetectDefaultLanguage(),
+            "非法语言值规范化回系统默认语言");
+
+        var dialogSettings = new AppSettings { Language = UILanguage.Chinese };
+        using (var dialog = new MonitoringOptionsDialog(dialogSettings))
+        {
+            Control segment = null;
+            foreach (Control control in dialog.Controls)
+                if (control.GetType().Name == "LanguageSegmentControl") segment = control;
+            var selectedLanguage = segment?.GetType().GetProperty("SelectedLanguage");
+            Check(segment != null && (UILanguage)selectedLanguage.GetValue(segment) == UILanguage.Chinese,
+                "监控设置包含语言分段控件且默认跟随设置");
+            selectedLanguage.SetValue(segment, UILanguage.English);
+            typeof(MonitoringOptionsDialog).GetMethod("SaveOptions", Hidden).Invoke(dialog, null);
+            Check(dialogSettings.Language == UILanguage.English,
+                "语言分段选择经保存写入设置对象");
+        }
+
+        var menuSettings = new AppSettings { Language = UILanguage.English };
+        var menuStore = new SettingsStore(Path.Combine(Output, "language-menu-settings.json"));
+        using (var monitor = new MonitorService())
+        using (var widget = new WidgetForm(monitor, menuStore, menuSettings))
+        {
+            try
+            {
+                Check(HasMenuItem(widget.ContextMenuStrip.Items, "Exit") && HasMenuItem(widget.ContextMenuStrip.Items, "Mini"),
+                    "英文模式下右键菜单使用英文文本");
+                Check(ClockDisplay.GetZoneName(ClockTimeZone.Pacific) == "Pacific",
+                    "英文模式下时区名称本地化");
+                int bands = CountVerticalClockSubtitleBands("Vertical-english-100.png");
+                Check(bands == 1 && File.Exists(Path.Combine(Output, "Vertical-english-100.png")),
+                    $"英文模式竖版时钟副标题仍为单行 (检测到 {bands} 条文字带) 且证据图已生成");
+            }
+            finally
+            {
+                UIStrings.SetLanguage(UILanguage.Chinese);
+            }
         }
     }
 

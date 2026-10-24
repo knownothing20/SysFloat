@@ -388,24 +388,24 @@ namespace SysFloat.UI
             string emptyMessage;
             if (selectedMetric == ProcessMetric.Cpu)
             {
-                title = "应用 CPU Top 5";
-                subtitle = "应用合计 · 约 5 秒平均";
+                title = UIStrings.Get("rank.cpuTitle");
+                subtitle = UIStrings.Get("rank.cpuSubtitle");
                 processes = snapshot.TopCpuProcesses;
-                emptyMessage = "暂无 CPU 占用进程";
+                emptyMessage = UIStrings.Get("rank.cpuEmpty");
             }
             else if (selectedMetric == ProcessMetric.Vram)
             {
-                title = "应用显存 Top 5";
-                subtitle = "应用合计 · 专用显存";
+                title = UIStrings.Get("rank.vramTitle");
+                subtitle = UIStrings.Get("rank.vramSubtitle");
                 processes = snapshot.TopVramProcesses;
-                emptyMessage = "暂无显存占用进程";
+                emptyMessage = UIStrings.Get("rank.vramEmpty");
             }
             else
             {
-                title = "应用内存 Top 5";
-                subtitle = "应用合计 · 私有工作集";
+                title = UIStrings.Get("rank.memoryTitle");
+                subtitle = UIStrings.Get("rank.memorySubtitle");
                 processes = snapshot.TopMemoryProcesses;
-                emptyMessage = "暂无内存占用进程";
+                emptyMessage = UIStrings.Get("rank.memoryEmpty");
             }
 
             int topCount = Math.Min(5, processes == null ? 0 : processes.Count);
@@ -416,18 +416,18 @@ namespace SysFloat.UI
 
             string unavailableMessage = null;
             if (snapshot.RankingMetric != selectedMetric)
-                unavailableMessage = "正在切换排行…";
+                unavailableMessage = UIStrings.Get("rank.switching");
             else if (selectedMetric == ProcessMetric.Cpu && !snapshot.CpuProcessesAvailable)
-                unavailableMessage = "正在采样 CPU…";
+                unavailableMessage = UIStrings.Get("rank.samplingCpu");
             else if (selectedMetric == ProcessMetric.Vram && !snapshot.VramProcessesAvailable)
             {
                 string status = snapshot.VramProcessesStatus;
                 unavailableMessage = string.IsNullOrWhiteSpace(status) || status == "等待显存数据"
-                    ? "系统未提供进程显存数据" : status;
+                    ? UIStrings.Get("rank.vramUnsupported") : status;
             }
             else if (selectedMetric == ProcessMetric.Memory && !snapshot.MemoryProcessesAvailable)
                 unavailableMessage = string.IsNullOrWhiteSpace(snapshot.MemoryProcessesStatus)
-                    ? "系统未提供私有工作集数据" : snapshot.MemoryProcessesStatus;
+                    ? UIStrings.Get("rank.memoryUnsupported") : snapshot.MemoryProcessesStatus;
 
             int listTop = bounds.Y + 46;
             if (unavailableMessage != null)
@@ -449,7 +449,7 @@ namespace SysFloat.UI
             {
                 ProcessInfo process = processes[i];
                 int y = listTop + i * rowHeight;
-                string name = string.IsNullOrWhiteSpace(process.Name) ? "未知进程" : process.Name;
+                string name = string.IsNullOrWhiteSpace(process.Name) ? UIStrings.Get("rank.unknownProcess") : process.Name;
                 string countSuffix = process.ProcessCount > 1 ? " (" + process.ProcessCount + ")" : "";
                 string metricText;
                 if (selectedMetric == ProcessMetric.Cpu)
@@ -481,11 +481,11 @@ namespace SysFloat.UI
             {
                 float min = 100, max = 0; bool found = false;
                 if (history != null) foreach (float value in history) if (!float.IsNaN(value) && !float.IsInfinity(value) && value >= 0) { min = Math.Min(min, value); max = Math.Max(max, value); found = true; }
-                return found ? string.Format("区间 {0:0}–{1:0}%", min, max) : "最近区间 --";
+                return found ? UIStrings.Format("detail.range", min, max) : UIStrings.Get("detail.noHistory");
             }
-            if (index == 1) return snapshot.MemoryTotalBytes > 0 ? FormatBytes(snapshot.MemoryUsedBytes) + " / " + FormatBytes(snapshot.MemoryTotalBytes) : (!HasSample(snapshot.MemoryPercent) ? "不可用" : string.Format("已用 {0:0}%", snapshot.MemoryPercent));
-            if (!snapshot.VramAvailable) return "不可用";
-            return snapshot.VramTotalBytes > 0 ? FormatBytes(snapshot.VramUsedBytes) + " / " + FormatBytes(snapshot.VramTotalBytes) : (!HasSample(snapshot.VramPercent) ? "不可用" : string.Format("已用 {0:0}%", snapshot.VramPercent));
+            if (index == 1) return snapshot.MemoryTotalBytes > 0 ? FormatBytes(snapshot.MemoryUsedBytes) + " / " + FormatBytes(snapshot.MemoryTotalBytes) : (!HasSample(snapshot.MemoryPercent) ? UIStrings.Get("detail.unavailable") : UIStrings.Format("detail.usedPercent", snapshot.MemoryPercent));
+            if (!snapshot.VramAvailable) return UIStrings.Get("detail.unavailable");
+            return snapshot.VramTotalBytes > 0 ? FormatBytes(snapshot.VramUsedBytes) + " / " + FormatBytes(snapshot.VramTotalBytes) : (!HasSample(snapshot.VramPercent) ? UIStrings.Get("detail.unavailable") : UIStrings.Format("detail.usedPercent", snapshot.VramPercent));
         }
 
         private static string Ellipsize(Graphics g, string value, Font font, int maxWidth)

@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 
 namespace SysFloat.Configuration
 {
@@ -34,6 +35,12 @@ namespace SysFloat.Configuration
         Local = 3
     }
 
+    public enum UILanguage
+    {
+        Chinese = 0,
+        English = 1
+    }
+
     public class AppSettings
     {
         public WidgetLayout Layout { get; set; } = WidgetLayout.Horizontal;
@@ -48,6 +55,19 @@ namespace SysFloat.Configuration
         public int ScalePercent { get; set; } = 100;
         public WidgetOpacity Opacity { get; set; } = WidgetOpacity.Opaque;
         public ClockTimeZone ClockZone { get; set; } = ClockTimeZone.Pacific;
+        public UILanguage Language { get; set; } = DetectDefaultLanguage();
+
+        /// <summary>按系统界面语言自动选择默认语言：中文系统用中文，其余用英文。</summary>
+        public static UILanguage DetectDefaultLanguage()
+        {
+            try
+            {
+                string twoLetter = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+                return string.Equals(twoLetter, "zh", StringComparison.OrdinalIgnoreCase)
+                    ? UILanguage.Chinese : UILanguage.English;
+            }
+            catch { return UILanguage.English; }
+        }
 
         public bool PowerSavingMode { get; set; } = false;
         public int SamplingIntervalSeconds { get; set; } = 3;
@@ -69,6 +89,9 @@ namespace SysFloat.Configuration
 
             if (!Enum.IsDefined(typeof(ClockTimeZone), ClockZone))
                 ClockZone = ClockTimeZone.Pacific;
+
+            if (!Enum.IsDefined(typeof(UILanguage), Language))
+                Language = DetectDefaultLanguage();
 
             if (SamplingIntervalSeconds <= 1)
                 SamplingIntervalSeconds = 1;

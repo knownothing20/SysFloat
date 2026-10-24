@@ -1032,6 +1032,7 @@ namespace SysFloat.UI
 
             float scale = (Math.Max(1, DeviceDpi) / 96f) * UserScale;
             g.ScaleTransform(scale, scale);
+            WidgetRenderer.ClockZone = _settings.ClockZone;
 
             var bounds = new Rectangle(0, 0, (int)Math.Ceiling(pixelWidth / scale), (int)Math.Ceiling(pixelHeight / scale));
             int threshold = _settings.HighLoadAlertsEnabled ? _settings.HighLoadThresholdPercent : int.MaxValue;
@@ -1294,10 +1295,13 @@ namespace SysFloat.UI
             if (metric == 3)
             {
                 DateTime utc = DateTime.UtcNow;
-                DateTime pacific = PacificClock.GetPacificTime(utc);
-                int hoursBehindBeijing = (int)(utc.AddHours(8) - pacific).TotalHours;
-                return "太平洋时间：" + pacific.ToString("HH:mm") + " " + PacificClock.GetAbbreviation(utc) + "\n" +
-                    PacificClock.FormatFullDate(utc) + $"\n比北京时间慢 {hoursBehindBeijing} 小时";
+                var zone = _settings.ClockZone;
+                double behind = ClockDisplay.HoursBehindBeijing(utc, zone);
+                string difference = behind == 0 ? "与北京时间一致"
+                    : behind > 0 ? $"比北京时间慢 {behind:0.#} 小时"
+                    : $"比北京时间快 {Math.Abs(behind):0.#} 小时";
+                return ClockDisplay.GetZoneName(zone) + "时间：" + ClockDisplay.FormatTime(utc, zone) + " " + ClockDisplay.GetShortZone(utc, zone) + "\n" +
+                    ClockDisplay.FormatFullDate(utc, zone) + "\n" + difference;
             }
             if (metric == 0)
             {

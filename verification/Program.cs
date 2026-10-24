@@ -40,6 +40,7 @@ internal static class Program
             VerifyLiveWiring();
             VerifySliverEdgeAndIdleRepaints();
             VerifyVerticalClockSingleLine();
+            VerifyClockZoneDisplay();
             VerifyTrayWiring();
             Console.WriteLine($"PASS {_passed} checks. Evidence: {Output}");
             return 0;
@@ -519,6 +520,13 @@ internal static class Program
     {
         // 扫描时钟区时间数字以下的文字带：合并成功应恰好一条（时区+日期单行），
         // 若实现回退成两行会扫描到两条带。
+        int bands = CountVerticalClockSubtitleBands();
+        Check(bands == 1, $"竖版时钟时区与日期合并为单行 (检测到 {bands} 条文字带)");
+    }
+
+    /// <summary>按 WidgetRenderer.ClockZone 当前时区渲染竖版，返回时钟副标题文字带数量；savePath 非空时保存证据图。</summary>
+    private static int CountVerticalClockSubtitleBands(string savePath = null)
+    {
         var logical = WidgetSizeHelper.GetSize(WidgetLayout.Vertical, 1f);
         using (var bitmap = new Bitmap(logical.Width, logical.Height))
         using (var graphics = Graphics.FromImage(bitmap))
@@ -527,6 +535,7 @@ internal static class Program
             graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
             WidgetRenderer.DrawLayout(graphics, new Rectangle(Point.Empty, logical), WidgetLayout.Vertical,
                 Sample(), new float[60], new float[60], new float[60]);
+            if (savePath != null) bitmap.Save(Path.Combine(Output, savePath), ImageFormat.Png);
             int clockTop = logical.Height - 84;
             int bands = 0;
             bool inBand = false;
@@ -542,7 +551,66 @@ internal static class Program
                 if (hasText && !inBand) { bands++; inBand = true; }
                 else if (!hasText) inBand = false;
             }
-            Check(bands == 1, $"竖版时钟时区与日期合并为单行 (检测到 {bands} 条文字带)");
+            return bands;
+        }
+    }
+
+    private static void VerifyClockZoneDisplay()
+    {
+        var utc = Utc("2026-10-24 04:30");
+        Check(ClockDisplay.FormatTime(utc, ClockTimeZone.Pacific) == "21:30" &&
+            ClockDisplay.FormatDate(utc, ClockTimeZone.Pacific) == "10/23",
+            "时区换算：夏令期太平洋 04:30Z 为前一天 21:30");
+        Check(ClockDisplay.FormatTime(utc, ClockTimeZone.Beijing) == "12:30" &&
+            ClockDisplay.GetShortZone(utc, ClockTimeZone.Beijing) == "UTC+8",
+            "时区换算：北京为固定 UTC+8");
+        Check(ClockDisplay.FormatTime(utc, ClockTimeZone.Utc) == "04:30" &&
+            ClockDisplay.GetZoneName(ClockTimeZone.Utc) == "UTC",
+            "时区换算：UTC 原样显示");
+        Check(ClockDisplay.GetTime(utc, ClockTimeZone.Local) == TimeZoneInfo.ConvertTimeFromUtc(utc, TimeZoneInfo.Local),
+            "时区换算：本机时区与系统换算一致");
+        var winter = Utc("2026-01-15 04:30");
+        Check(ClockDisplay.FormatTime(winter, ClockTimeZone.Pacific) == "20:30" &&
+            ClockDisplay.GetShortZone(winter, ClockTimeZone.Pacific) == "PST" &&
+            ClockDisplay.FormatTime(winter, ClockTimeZone.Beijing) == "12:30",
+            "时区换算：冬令期太平洋走 PST 且北京不受夏令影响");
+        Check(ClockDisplay.HoursBehindBeijing(utc, ClockTimeZone.Pacific) == 15 &&
+            ClockDisplay.HoursBehindBeijing(utc, ClockTimeZone.Beijing) == 0,
+            "与北京时差计算正确");
+
+        var zoneStore = new SettingsStore(Path.Combine(Output, "zone-test-settings.json"));
+        zoneStore.Save(new AppSettings { ClockZone = ClockTimeZone.Beijing });
+        Check(zoneStore.Load().ClockZone == ClockTimeZone.Beijing,
+            "时区显示设置经实际 SettingsStore 保存加载后原样保留");
+        var invalid = new AppSettings { ClockZone = (ClockTimeZone)99 };
+        invalid.Normalize();
+        Check(invalid.ClockZone == ClockTimeZone.Pacific, "非法时区值规范化回太平洋");
+
+        var dialogSettings = new AppSettings { ClockZone = ClockTimeZone.Utc };
+        using (var dialog = new MonitoringOptionsDialog(dialogSettings))
+        {
+            Control segment = null;
+            foreach (Control control in dialog.Controls)
+                if (control.GetType().Name == "TimeZoneSegmentControl") segment = control;
+            var selectedZone = segment?.GetType().GetProperty("SelectedZone");
+            Check(segment != null && (ClockTimeZone)selectedZone.GetValue(segment) == ClockTimeZone.Utc,
+                "监控设置包含时区分段控件且默认跟随当前设置");
+            selectedZone.SetValue(segment, ClockTimeZone.Beijing);
+            typeof(MonitoringOptionsDialog).GetMethod("SaveOptions", Hidden).Invoke(dialog, null);
+            Check(dialogSettings.ClockZone == ClockTimeZone.Beijing,
+                "时区分段选择经保存写入设置对象");
+        }
+
+        WidgetRenderer.ClockZone = ClockTimeZone.Beijing;
+        try
+        {
+            int bands = CountVerticalClockSubtitleBands("Vertical-beijing-100.png");
+            Check(bands == 1 && File.Exists(Path.Combine(Output, "Vertical-beijing-100.png")),
+                $"北京时区竖版时钟副标题仍为单行 (检测到 {bands} 条文字带) 且证据图已生成");
+        }
+        finally
+        {
+            WidgetRenderer.ClockZone = ClockTimeZone.Pacific;
         }
     }
 
@@ -635,6 +703,9 @@ internal static class Program
             Pump(700);
             Check(widget.Left == shownLeft && widget.Height == verticalSize.Height, "鼠标移到小边后窗口滑出");
             typeof(WidgetForm).GetMethod("OnMouseLeave", Hidden).Invoke(widget, new object[] { EventArgs.Empty });
+            // 真实光标可能恰好停在展开窗口内，收起倒计时按设计会跳过；把光标移到
+            // 停靠对侧角落（离开窗口）保证断言稳定。
+            Cursor.Position = new Point(dockAtRight ? dockWa.Left + 4 : dockWa.Right - 4, dockWa.Top + 4);
             Pump(3000);
             Check(widget.Left == hiddenLeft, "鼠标离开后窗口再次收起");
             widget.SetEdgeAutoHide(false);

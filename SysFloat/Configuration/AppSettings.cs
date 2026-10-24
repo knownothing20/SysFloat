@@ -26,6 +26,14 @@ namespace SysFloat.Configuration
         Bottom = 4
     }
 
+    public enum ClockTimeZone
+    {
+        Pacific = 0,
+        Beijing = 1,
+        Utc = 2,
+        Local = 3
+    }
+
     public class AppSettings
     {
         public WidgetLayout Layout { get; set; } = WidgetLayout.Horizontal;
@@ -39,6 +47,7 @@ namespace SysFloat.Configuration
         public DockEdge DockedEdge { get; set; } = DockEdge.None;
         public int ScalePercent { get; set; } = 100;
         public WidgetOpacity Opacity { get; set; } = WidgetOpacity.Opaque;
+        public ClockTimeZone ClockZone { get; set; } = ClockTimeZone.Pacific;
 
         public bool PowerSavingMode { get; set; } = false;
         public int SamplingIntervalSeconds { get; set; } = 3;
@@ -57,6 +66,9 @@ namespace SysFloat.Configuration
 
             if (!Enum.IsDefined(typeof(DockEdge), DockedEdge))
                 DockedEdge = DockEdge.None;
+
+            if (!Enum.IsDefined(typeof(ClockTimeZone), ClockZone))
+                ClockZone = ClockTimeZone.Pacific;
 
             if (SamplingIntervalSeconds <= 1)
                 SamplingIntervalSeconds = 1;

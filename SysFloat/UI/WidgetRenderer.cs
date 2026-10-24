@@ -9,6 +9,9 @@ namespace SysFloat.UI
 {
     public static class WidgetRenderer
     {
+        /// <summary>当前时钟显示时区；由 WidgetForm 绘制前按设置刷新，默认太平洋。</summary>
+        public static ClockTimeZone ClockZone { get; set; } = ClockTimeZone.Pacific;
+
         private static readonly Color Background = Color.FromArgb(32, 38, 49);
         private static readonly Color Border = Color.FromArgb(52, 59, 73);
         private static readonly Color Text = Color.FromArgb(244, 246, 250);
@@ -252,21 +255,18 @@ namespace SysFloat.UI
         private static void DrawClock(Graphics g, Rectangle area, bool vertical, Color muted)
         {
             DateTime utc = DateTime.UtcNow;
-            DateTime local = PacificClock.GetPacificTime(utc);
-            string zone = PacificClock.GetAbbreviation(utc);
-            string time = local.ToString("HH:mm");
-            string date = local.ToString("MM/dd");
+            var zone = ClockZone;
+            string time = ClockDisplay.FormatTime(utc, zone);
             if (vertical)
             {
                 var ts = g.MeasureString(time, ValueFont);
                 using (var brush = new SolidBrush(Text)) g.DrawString(time, ValueFont, brush, area.X + (area.Width - ts.Width) / 2f, area.Y + 6);
-                // 时区与日期合并为一行；竖版 92px 窄面板放不下带"太平洋"前缀的整行时
-                // 退化为 "PDT 10/23"，保底单行（完整地名在横版副标题与悬停提示里）。
-                string subtitle = "太平洋 " + zone + " " + date;
+                // 时区与日期合并为一行；竖版 92px 窄面板放不下完整副标题时退化为紧凑版。
+                string subtitle = ClockDisplay.GetSubtitleFull(utc, zone);
                 var ss = g.MeasureString(subtitle, ClockSmallFont);
                 if (ss.Width > area.Width)
                 {
-                    subtitle = zone + " " + date;
+                    subtitle = ClockDisplay.GetSubtitleCompact(utc, zone);
                     ss = g.MeasureString(subtitle, ClockSmallFont);
                 }
                 using (var brush = new SolidBrush(muted)) g.DrawString(subtitle, ClockSmallFont, brush, area.X + (area.Width - ss.Width) / 2f, area.Y + 54);
@@ -274,7 +274,7 @@ namespace SysFloat.UI
             else
             {
                 using (var brush = new SolidBrush(Text)) g.DrawString(time, ClockFont, brush, area.X, area.Y + 1);
-                string subtitle = "太平洋  " + zone + "  " + date;
+                string subtitle = ClockDisplay.GetSubtitleWide(utc, zone);
                 using (var brush = new SolidBrush(muted)) g.DrawString(subtitle, ClockSmallFont, brush, area.X + 1, area.Bottom - 13);
             }
         }
@@ -283,8 +283,8 @@ namespace SysFloat.UI
         {
             using (var brush = new SolidBrush(Text)) g.DrawString("SysFloat", TitleFont, brush, bounds.X + 14, bounds.Y + 10);
             DateTime utc = DateTime.UtcNow;
-            DateTime local = PacificClock.GetPacificTime(utc);
-            string location = "太平洋 · " + PacificClock.GetAbbreviation(utc);
+            DateTime local = ClockDisplay.GetTime(utc, ClockZone);
+            string location = ClockDisplay.GetHeaderLabel(utc, ClockZone);
             string time = local.ToString("HH:mm");
             string date = local.ToString("MM/dd");
             float locationWidth = g.MeasureString(location, DetailFont).Width;

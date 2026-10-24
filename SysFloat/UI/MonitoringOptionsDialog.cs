@@ -10,7 +10,7 @@ namespace SysFloat.UI
     public sealed class MonitoringOptionsDialog : Form
     {
         private const int LogicalWidth = 520;
-        private const int LogicalHeight = 510;
+        private const int LogicalHeight = 614;
         private static readonly Color WindowColor = Color.FromArgb(32, 38, 49);
         private static readonly Color CardColor = Color.FromArgb(39, 46, 59);
         private static readonly Color CardBorder = Color.FromArgb(53, 62, 78);
@@ -25,6 +25,7 @@ namespace SysFloat.UI
         private readonly NumberField _threshold;
         private readonly NumberField _duration;
         private readonly ToggleControl _popup;
+        private readonly TimeZoneSegmentControl _zone;
         private readonly Button _save;
         private readonly Button _cancel;
         private readonly Button _close;
@@ -51,6 +52,7 @@ namespace SysFloat.UI
             _threshold = new NumberField(1, 100, _settings.HighLoadThresholdPercent, "触发阈值");
             _duration = new NumberField(1, 300, _settings.HighLoadDurationSeconds, "持续时间");
             _popup = new ToggleControl("托盘通知：恢复后可再次提醒（至少间隔 5 分钟）", _settings.AlertPopupEnabled);
+            _zone = new TimeZoneSegmentControl(_settings.ClockZone);
 
             _save = new Button { Text = "保存", DialogResult = DialogResult.None, FlatStyle = FlatStyle.Flat,
                 BackColor = Accent, ForeColor = Color.White, UseVisualStyleBackColor = false, TabIndex = 6 };
@@ -74,10 +76,10 @@ namespace SysFloat.UI
             _close.FlatAppearance.BorderSize = 0;
             _close.FlatAppearance.MouseOverBackColor = Color.FromArgb(57, 65, 80);
 
-            Controls.AddRange(new Control[] { _powerSaving, _interval, _alerts, _threshold, _duration, _popup, _save, _cancel, _close });
+            Controls.AddRange(new Control[] { _powerSaving, _interval, _alerts, _threshold, _duration, _popup, _zone, _save, _cancel, _close });
             // 默认展示态不显示键盘焦点虚线框，键盘 Tab 导航仍可用。
             Shown += (s, e) => { ActiveControl = null; };
-            foreach (var control in new Control[] { _powerSaving, _interval, _alerts, _threshold, _duration, _popup })
+            foreach (var control in new Control[] { _powerSaving, _interval, _alerts, _threshold, _duration, _popup, _zone })
                 control.BackColor = CardColor;
             AcceptButton = _save;
             CancelButton = _cancel;
@@ -85,13 +87,22 @@ namespace SysFloat.UI
             _alerts.CheckedChanged += (s, e) => UpdateEnabledState();
 
             using (var graphics = CreateGraphics()) _scale = Math.Max(1f, graphics.DpiX / 96f);
+            FitToScreen();
             ApplyScaleAndLayout();
             UpdateEnabledState();
         }
 
+        // 高 DPI 小屏放不下整窗时按比例整体缩小对话框（含字体），布局坐标不变。
+        private void FitToScreen()
+        {
+            float scaledHeight = LogicalHeight * _scale;
+            float fit = Math.Min(1f, Screen.PrimaryScreen.WorkingArea.Height / scaledHeight);
+            _scale = Math.Max(0.8f, _scale * fit);
+        }
+
         private void ApplyScaleAndLayout()
         {
-            _scale = Math.Max(1f, _scale);
+            _scale = Math.Max(0.8f, _scale);
             foreach (var previousFont in _ownedFonts) previousFont.Dispose();
             _ownedFonts.Clear();
             ClientSize = ScaledSize(LogicalWidth, LogicalHeight);
@@ -102,8 +113,9 @@ namespace SysFloat.UI
             SetControl(_threshold, 372, 306, 92, 34, 14f, FontStyle.Bold, 3);
             SetControl(_duration, 372, 350, 92, 34, 14f, FontStyle.Bold, 4);
             SetControl(_popup, 34, 397, 452, 38, 11.5f, FontStyle.Regular, 5);
-            SetControl(_save, 336, 461, 82, 32, 13.5f, FontStyle.Bold, 6);
-            SetControl(_cancel, 428, 461, 64, 32, 13f, FontStyle.Regular, 7);
+            SetControl(_zone, 142, 518, 300, 34, 12.5f, FontStyle.Bold, 6);
+            SetControl(_save, 336, 566, 82, 32, 13.5f, FontStyle.Bold, 7);
+            SetControl(_cancel, 428, 566, 64, 32, 13f, FontStyle.Regular, 8);
             SetControl(_close, 474, 13, 32, 30, 18f, FontStyle.Regular, -1);
 
             using (var path = CreateRoundPath(new Rectangle(0, 0, Width, Height), Scaled(14)))
@@ -134,6 +146,7 @@ namespace SysFloat.UI
             e.Graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
             DrawCard(e.Graphics, new Rectangle(18, 74, LogicalWidth - 36, 146));
             DrawCard(e.Graphics, new Rectangle(18, 232, LogicalWidth - 36, 214));
+            DrawCard(e.Graphics, new Rectangle(18, 458, LogicalWidth - 36, 92));
 
             DrawText(e.Graphics, "监控设置", 22, 12, 170, 28, 19f, FontStyle.Bold, MainText);
             DrawText(e.Graphics, "SysFloat  ·  按需调整采样和提醒", 23, 42, 330, 18, 11.5f, FontStyle.Regular, MutedText);
@@ -149,6 +162,10 @@ namespace SysFloat.UI
             DrawText(e.Graphics, "%", 472, 312, 24, 22, 12f, FontStyle.Regular, MutedText);
             DrawText(e.Graphics, "持续时间", 36, 356, 150, 22, 12f, FontStyle.Regular, MutedText);
             DrawText(e.Graphics, "秒", 472, 356, 24, 22, 12f, FontStyle.Regular, MutedText);
+
+            DrawText(e.Graphics, "时钟时区", 36, 471, 180, 20, 14.5f, FontStyle.Bold, MainText);
+            DrawText(e.Graphics, "悬浮窗时钟与时间提示显示的时区，不影响监控采样。", 36, 500, 442, 18, 11.5f, FontStyle.Regular, MutedText);
+            DrawText(e.Graphics, "显示时区", 36, 524, 92, 22, 12f, FontStyle.Regular, MutedText);
         }
 
         private void DrawCard(Graphics graphics, Rectangle logicalBounds)
@@ -201,6 +218,7 @@ namespace SysFloat.UI
             _settings.HighLoadThresholdPercent = _threshold.Value;
             _settings.HighLoadDurationSeconds = _duration.Value;
             _settings.AlertPopupEnabled = _popup.Checked;
+            _settings.ClockZone = _zone.SelectedZone;
             _settings.Normalize();
         }
 
@@ -208,6 +226,7 @@ namespace SysFloat.UI
         {
             base.OnDpiChanged(e);
             _scale = Math.Max(1f, e.DeviceDpiNew / 96f);
+            FitToScreen();
             ApplyScaleAndLayout();
         }
 
@@ -267,6 +286,78 @@ namespace SysFloat.UI
             protected override void OnKeyDown(KeyEventArgs e)
             {
                 if (e.KeyCode == Keys.Space) { Checked = !Checked; e.Handled = true; }
+                base.OnKeyDown(e);
+            }
+        }
+
+        private sealed class TimeZoneSegmentControl : Control
+        {
+            private readonly ClockTimeZone[] _options = { ClockTimeZone.Pacific, ClockTimeZone.Beijing, ClockTimeZone.Utc, ClockTimeZone.Local };
+            private readonly string[] _labels = { "太平洋", "北京", "UTC", "本机" };
+            public ClockTimeZone SelectedZone { get; private set; }
+
+            public TimeZoneSegmentControl(ClockTimeZone selected)
+            {
+                SelectedZone = Array.IndexOf(_options, selected) >= 0 ? selected : ClockTimeZone.Pacific;
+                TabStop = true;
+                AccessibleRole = AccessibleRole.List;
+                AccessibleName = "时钟显示时区";
+                SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                base.OnPaint(e);
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                var bounds = new Rectangle(0, 0, Width - 1, Height - 1);
+                using (var path = CreateRoundPath(bounds, Math.Max(6, Height / 4)))
+                using (var brush = new SolidBrush(Enabled ? Color.FromArgb(31, 37, 48) : Color.FromArgb(34, 39, 48)))
+                using (var pen = new Pen(CardBorder))
+                {
+                    e.Graphics.FillPath(brush, path);
+                    e.Graphics.DrawPath(pen, path);
+                }
+                int segmentWidth = Width / _options.Length;
+                for (int i = 0; i < _options.Length; i++)
+                {
+                    var rect = new Rectangle(i * segmentWidth + 2, 2, segmentWidth - 3, Height - 4);
+                    bool selected = _options[i] == SelectedZone;
+                    if (selected)
+                    {
+                        using (var path = CreateRoundPath(rect, Math.Max(5, Height / 5)))
+                        using (var brush = new SolidBrush(Enabled ? Accent : Color.FromArgb(60, Accent))) e.Graphics.FillPath(brush, path);
+                    }
+                    using (var brush = new SolidBrush(!Enabled
+                        ? (selected ? Color.FromArgb(170, 178, 192) : Color.FromArgb(105, 113, 128))
+                        : selected ? Color.White : MutedText))
+                    {
+                        var size = e.Graphics.MeasureString(_labels[i], Font);
+                        e.Graphics.DrawString(_labels[i], Font, brush, rect.X + (rect.Width - size.Width) / 2f, rect.Y + (rect.Height - size.Height) / 2f);
+                    }
+                }
+                if (Focused) ControlPaint.DrawFocusRectangle(e.Graphics, ClientRectangle);
+            }
+
+            protected override void OnMouseDown(MouseEventArgs e)
+            {
+                base.OnMouseDown(e);
+                if (!Enabled || e.Button != MouseButtons.Left) return;
+                Focus();
+                int index = Math.Max(0, Math.Min(_options.Length - 1, e.X * _options.Length / Math.Max(1, Width)));
+                SelectedZone = _options[index];
+                Invalidate();
+            }
+
+            protected override void OnKeyDown(KeyEventArgs e)
+            {
+                int index = Array.IndexOf(_options, SelectedZone);
+                if (e.KeyCode == Keys.Left || e.KeyCode == Keys.Right)
+                {
+                    index = Math.Max(0, Math.Min(_options.Length - 1, index + (e.KeyCode == Keys.Right ? 1 : -1)));
+                    SelectedZone = _options[index];
+                    Invalidate();
+                    e.Handled = true;
+                }
                 base.OnKeyDown(e);
             }
         }

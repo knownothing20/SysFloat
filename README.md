@@ -12,12 +12,14 @@
 
 ## 下载和使用
 
-前往 [Releases](https://github.com/knownothing20/SysFloat/releases/latest) 下载 `SysFloat.exe`，保存到任意可写目录，双击运行即可。
+前往 [Releases](https://github.com/knownothing20/SysFloat/releases/latest) 下载，两种附件内容相同：
+
+- **`SysFloat-v1.x.x.zip`（约 60 MB，推荐）**：解压得到 `SysFloat.exe`，保存到任意可写目录运行。
+- **`SysFloat.exe`（约 146 MB）**：免解压直链；体积大是因为内置了整套 .NET 运行时。
 
 - 适用于 **64 位 Windows**。
-- 发布版为 **win-x64 自包含单文件**，不需要额外安装 .NET。
-- exe 约 **146 MB**，包含 Windows Desktop 运行时；文件大小不等于运行内存占用。
-- 发布附件同时提供 SHA-256 校验文件。
+- 发布版为 **win-x64 自包含单文件**，不需要额外安装 .NET；文件大小不等于运行内存占用（实际运行私有内存约 45 MB）。
+- 每个附件同时提供 SHA-256 校验文件。
 - 程序未签名，首次运行时 Windows 可能显示安全提示；请核对下载来源和校验值。
 
 ## 功能

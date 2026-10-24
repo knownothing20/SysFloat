@@ -17,3 +17,9 @@ settings.json
 
 # Downloadable executables belong in GitHub Releases
 *.exe
+
+# Local-only outputs of the merged workspace layout
+/release/
+/backup/
+/local/
+/docs/tasks/

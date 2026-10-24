@@ -161,25 +161,42 @@ CPU 排行使用各成员进程 CPU 时间在两次采样之间的增量，按�
 
 当前源码目标框架为 `net5.0-windows`，使用 WinForms。**.NET 5 已结束官方支持**；这是现有版本的构建环境，并非建议新项目采用该版本。
 
+仓库目录结构：
+
+```
+SysFloat.exe          直接运行的程序（不进 git，来自 Releases 或本地发布）
+src\                  源码：SysFloat 主项目 + verification 验证程序
+release\              本地发布输出（不进 git）
+backup\               本机历史版本备份（不进 git）
+local\                私有内容：内部开发记录等（不进 git，见下方隐私说明）
+docs\                 公开文档与截图
+tools\                publish.bat、privacy-check.ps1 等工具
+```
+
 安装匹配的 .NET SDK 后，在仓库根目录运行：
 
 ```powershell
-dotnet build .\SysFloat\SysFloat.csproj -c Release
+dotnet build .\src\SysFloat\SysFloat.csproj -c Release
 ```
 
 发布可直接复制运行的 x64 单文件：
 
 ```powershell
-dotnet publish .\SysFloat\SysFloat.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false -p:UseAppHost=true -o .\SysFloat\artifacts\publish\win-x64-self-contained
+dotnet publish .\src\SysFloat\SysFloat.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false -p:UseAppHost=true -o .\release\win-x64-self-contained
 ```
 
-也可以运行 `SysFloat\publish.bat`。发布文件位于 `SysFloat\artifacts\publish\win-x64-self-contained\SysFloat.exe`。
+也可以运行 `tools\publish.bat`，输出位于 `release\win-x64-self-contained\SysFloat.exe`。
+
+### 隐私
+
+- `local\`（内部开发记录等本机私有内容）、`release\`、`backup\` 均被 `.gitignore` 排除，不会提交或推送。
+- 发布前可运行 `tools\privacy-check.ps1`（见下文）扫描仓库文本是否含个人路径、令牌等隐私内容。
 
 ### 验证
 
 ```powershell
-dotnet build .\verification\SysFloat.Verification.csproj -c Release -p:SuppressTfmSupportBuildWarnings=true
-.\verification\bin\Release\net5.0-windows\win-x64\SysFloat.Verification.exe
+dotnet build .\src\verification\SysFloat.Verification.csproj -c Release -p:SuppressTfmSupportBuildWarnings=true
+.\src\verification\bin\Release\net5.0-windows\win-x64\SysFloat.Verification.exe
 ```
 
 验证程序会短暂创建测试窗口和托盘图标，并使用独立设置文件，不会覆盖日常使用的设置。当前共 **164 项断言**，覆盖时区冬夏/跨日/重复小时与四种显示时区换算、语言自动检测与双语菜单/渲染、持续超限提醒、设置保存/取消、采样配置、显存单位、四种布局和设置窗口的 DPI 渲染、用户缩放与边缘吸附、贴边停靠/收起/弹出的状态机与留边高亮像素、开机自启注册表读写，以及真实监控与界面的接线。

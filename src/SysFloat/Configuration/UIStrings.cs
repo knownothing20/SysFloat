@@ -121,6 +121,8 @@ namespace SysFloat.Configuration
             { "alert.metric.ram", "内存" },
             { "alert.metric.vram", "显存" },
             { "alert.suffix", "，持续至少 {0} 秒" },
+            { "toast.autoStartOn", "已开启开机自启：SysFloat 将随 Windows 启动" },
+            { "toast.autoStartOff", "已关闭开机自启" },
         };
 
         private static readonly Dictionary<string, string> English = new Dictionary<string, string>
@@ -213,6 +215,8 @@ namespace SysFloat.Configuration
             { "alert.metric.ram", "RAM" },
             { "alert.metric.vram", "VRAM" },
             { "alert.suffix", ", sustained for at least {0} s" },
+            { "toast.autoStartOn", "Start with Windows enabled" },
+            { "toast.autoStartOff", "Start with Windows disabled" },
         };
     }
 }

@@ -155,8 +155,10 @@ namespace SysFloat
             menu.Items.Add(TrayMenuItem("menu.autoStart", (s, e) =>
             {
                 StartupRegistration.SetEnabled(!StartupRegistration.IsEnabled());
+                bool actual = StartupRegistration.IsEnabled();
                 _widgetForm.UpdateMenuChecks();
                 UpdateTrayMenuChecks(menu);
+                ShowAutoStartFeedback(actual);
             }));
             menu.Items.Add(TrayMenuItem("menu.edgeHide", (s, e) =>
             {
@@ -253,9 +255,18 @@ namespace SysFloat
             _widgetForm = new WidgetForm(_monitorService, _settingsStore, _settings);
             _widgetForm.CloseClicked += () => OnExitClick(this, EventArgs.Empty);
             _widgetForm.MonitoringOptionsRequested += ShowMonitoringOptions;
+            _widgetForm.AutoStartChanged += ShowAutoStartFeedback;
             _widgetForm.SetInitialPosition();
             _ = _widgetForm.Handle;
             _widgetForm.ApplyMonitoringSettings();
+        }
+
+        // 开关自启后弹托盘气泡确认；菜单点完即关，没有这条反馈用户无从得知结果。
+        // 注：Windows 免打扰/专注模式下系统可能不显示气泡，重开菜单看 ● 仍可确认状态。
+        private void ShowAutoStartFeedback(bool enabled)
+        {
+            _notifyIcon.ShowBalloonTip(2500, "SysFloat",
+                UIStrings.Get(enabled ? "toast.autoStartOn" : "toast.autoStartOff"), ToolTipIcon.Info);
         }
 
         private void ShowMonitoringOptions()

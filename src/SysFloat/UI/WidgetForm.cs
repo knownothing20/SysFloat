@@ -78,6 +78,7 @@ namespace SysFloat.UI
         public event Action<bool> TopMostChanged;
         public event Action PositionChanged;
         public event Action MonitoringOptionsRequested;
+        public event Action<bool> AutoStartChanged;
 
         public ProcessMetric SelectedProcessMetric => _selectedProcessMetric;
 
@@ -177,7 +178,10 @@ namespace SysFloat.UI
             _contextMenu.Items.Add(MenuItem("menu.autoStart", (s, e) =>
             {
                 StartupRegistration.SetEnabled(!StartupRegistration.IsEnabled());
+                // 注册表写入可能静默失败；按实际状态而非意图反馈。
+                bool actual = StartupRegistration.IsEnabled();
                 UpdateMenuChecks();
+                AutoStartChanged?.Invoke(actual);
             }));
             _contextMenu.Items.Add(MenuItem("menu.edgeHide", (s, e) => SetEdgeAutoHide(!_settings.EdgeAutoHide)));
 

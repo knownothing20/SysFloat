@@ -823,6 +823,30 @@ internal static class Program
                 HasOptions(widget.ContextMenuStrip), "widget menu exposes monitoring settings");
             Check(HasMenuItem(widget.ContextMenuStrip.Items, "迷你版") && HasMenuItem(widget.ContextMenuStrip.Items, "大小") &&
                 HasMenuItem(widget.ContextMenuStrip.Items, "边缘吸附"), "右键菜单包含迷你版、大小与边缘吸附文本项");
+            // 开机自启菜单项：点击后注册表翻转并按实际状态触发事件；测完恢复原状态。
+            {
+                bool originalAutoStart = StartupRegistration.IsEnabled();
+                bool? eventState = null;
+                Action<bool> listener = state => eventState = state;
+                widget.AutoStartChanged += listener;
+                try
+                {
+                    ToolStripMenuItem autoStartItem = null;
+                    foreach (ToolStripItem entry in widget.ContextMenuStrip.Items)
+                        if (entry is ToolStripMenuItem mi && (string)mi.Tag == "menu.autoStart") autoStartItem = mi;
+                    autoStartItem.PerformClick();
+                    Check(StartupRegistration.IsEnabled() == !originalAutoStart && eventState == !originalAutoStart,
+                        "点击开机自启菜单项翻转注册表并按实际状态发出确认事件");
+                    autoStartItem.PerformClick();
+                    Check(StartupRegistration.IsEnabled() == originalAutoStart && eventState == originalAutoStart,
+                        "再次点击恢复原开关状态");
+                }
+                finally
+                {
+                    widget.AutoStartChanged -= listener;
+                    StartupRegistration.SetEnabled(originalAutoStart);
+                }
+            }
             widget.ApplyLayout(WidgetLayout.Expanded);
             widget.HideWidget();
             Check(Field(monitor, "_processTimer") == null && !((System.Windows.Forms.Timer)Field(widget, "_clockTimer")).Enabled,

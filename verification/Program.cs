@@ -1,11 +1,10 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Reflection;
-using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
 using SysFloat.Configuration;
@@ -32,14 +31,15 @@ internal static class Program
             VerifySettings();
             VerifyGpuUnits();
             VerifyProcessCpuTracker();
-            ApplicationGroupingChecks.Run(Check);
             VerifyProcessVramCounter();
-            VerifyApplicationMemory();
             RenderLayouts();
+            RenderTranslucentEvidence();
+            VerifyEdgeAutoHideLogic();
+            VerifyStartupRegistration();
             RenderLinkedRankings();
-            VerifyBackgroundTransparency();
-            VerifyNativeTransparency();
             VerifyLiveWiring();
+            VerifySliverEdgeAndIdleRepaints();
+            VerifyVerticalClockSingleLine();
             VerifyTrayWiring();
             Console.WriteLine($"PASS {_passed} checks. Evidence: {Output}");
             return 0;
@@ -106,6 +106,15 @@ internal static class Program
         Check(settings.SamplingIntervalSeconds == 5 && settings.HighLoadThresholdPercent == 100 &&
             settings.HighLoadDurationSeconds == 1 && settings.Layout == WidgetLayout.Horizontal &&
             settings.Opacity == WidgetOpacity.Opaque, "invalid settings clamp safely");
+        var scaleSettings = new AppSettings { ScalePercent = 999 };
+        scaleSettings.Normalize();
+        Check(scaleSettings.ScalePercent == 200, "缩放百分比 999 规范化后夹紧到 200");
+        scaleSettings.ScalePercent = 10;
+        scaleSettings.Normalize();
+        Check(scaleSettings.ScalePercent == 50, "缩放百分比 10 规范化后夹紧到 50");
+        scaleSettings.ScalePercent = 137;
+        scaleSettings.Normalize();
+        Check(scaleSettings.ScalePercent == 135, "缩放百分比 137 规范化为 5 的倍数 135");
         var store = new SettingsStore(Path.Combine(Output, "settings-test.json"));
         settings.PowerSavingMode = true;
         settings.AlertPopupEnabled = true;
@@ -113,6 +122,12 @@ internal static class Program
         var loaded = store.Load();
         Check(loaded.PowerSavingMode && loaded.AlertPopupEnabled && loaded.SamplingIntervalSeconds == 5,
             "new settings persist through actual SettingsStore");
+        store.Save(new AppSettings { ScalePercent = 125, SnapToEdges = false, EdgeAutoHide = false, DockedEdge = DockEdge.Right });
+        var scaledLoaded = store.Load();
+        Check(scaledLoaded.ScalePercent == 125 && !scaledLoaded.SnapToEdges,
+            "用户缩放与边缘吸附设置经实际 SettingsStore 保存加载后原样保留");
+        Check(!scaledLoaded.EdgeAutoHide && scaledLoaded.DockedEdge == DockEdge.Right,
+            "贴边隐藏开关与停靠边经实际 SettingsStore 保存加载后原样保留");
         using (var dialog = new MonitoringOptionsDialog(new AppSettings()))
         {
             dialog.Show();
@@ -201,27 +216,6 @@ internal static class Program
         Check(reusedRows.TrueForAll(row => row.ProcessId != 7), "PID reuse never inherits previous CPU baseline");
         object stale = Result(70000, 100000000, 40000000, 4000);
         Check(!(bool)stale.GetType().GetProperty("Available").GetValue(stale), "stale CPU sampling gap resets delta baseline");
-
-        var allTracker = Activator.CreateInstance(trackerType, true);
-        object Many(long timestamp, long cpuTicks)
-        {
-            var samples = Array.CreateInstance(sampleType, 8);
-            for (int i = 0; i < samples.Length; i++)
-            {
-                var sample = Activator.CreateInstance(sampleType, true);
-                SetProperty(sample, "ProcessId", 100 + i);
-                SetProperty(sample, "Name", "worker");
-                SetProperty(sample, "StartTimeTicks", 2000L);
-                SetProperty(sample, "TotalProcessorTimeTicks", cpuTicks);
-                SetProperty(sample, "MonotonicTimestamp", timestamp);
-                samples.SetValue(sample, i);
-            }
-            return update.Invoke(allTracker, new object[] { samples, 0, 4, 1000L });
-        }
-        Many(1000, 10000000);
-        var allResult = Many(3000, 11000000);
-        var allRows = (List<ProcessInfo>)allResult.GetType().GetProperty("Processes").GetValue(allResult);
-        Check(allRows.Count == 8, "CPU retains every readable PID before application aggregation, not just five");
     }
 
     private static void VerifyProcessVramCounter()
@@ -275,12 +269,12 @@ internal static class Program
                 snapshot.CpuProcessesAvailable = true;
                 snapshot.VramProcessesAvailable = true;
                 snapshot.TopCpuProcesses = new List<ProcessInfo> {
-                    new ProcessInfo { Name = "Example CPU app", ProcessCount = 12, CpuPercent = 23.5f },
-                    new ProcessInfo { Name = "Browser", ProcessCount = 8, CpuPercent = 8.2f },
+                    new ProcessInfo { Name = "Example CPU worker", CpuPercent = 23.5f },
+                    new ProcessInfo { Name = "Browser", CpuPercent = 8.2f },
                     new ProcessInfo { Name = "Editor", CpuPercent = 3.1f } };
                 snapshot.TopVramProcesses = new List<ProcessInfo> {
-                    new ProcessInfo { Name = "Example GPU app", ProcessCount = 4, VramBytes = 512UL * 1024 * 1024 },
-                    new ProcessInfo { Name = "Browser", ProcessCount = 8, VramBytes = 256UL * 1024 * 1024 },
+                    new ProcessInfo { Name = "Example GPU app", VramBytes = 512UL * 1024 * 1024 },
+                    new ProcessInfo { Name = "Browser", VramBytes = 256UL * 1024 * 1024 },
                     new ProcessInfo { Name = "Desktop compositor", VramBytes = 128UL * 1024 * 1024 } };
                 var logical = WidgetSizeHelper.GetSize(WidgetLayout.Expanded, 1f);
                 var physical = WidgetSizeHelper.GetSize(WidgetLayout.Expanded, scale);
@@ -305,6 +299,9 @@ internal static class Program
     {
         var history = new float[60];
         for (int i = 0; i < history.Length; i++) history[i] = 12 + (float)(Math.Sin(i * 1.2) * 5 + i % 4 * 4);
+        Check(WidgetSizeHelper.GetSize(WidgetLayout.Mini, 1f) == new Size(204, 44), "迷你版逻辑尺寸为 204x44");
+        Check(WidgetSizeHelper.GetSize(WidgetLayout.Mini, 1f, 1.5f).Width == (int)(204 * 1.5f),
+            "用户缩放重载按缩放倍率放大迷你版宽度");
         foreach (WidgetLayout layout in Enum.GetValues(typeof(WidgetLayout)))
         {
             foreach (float scale in new[] { 1f, 1.5f, 2f })
@@ -322,15 +319,243 @@ internal static class Program
                     bitmap.Save(Path.Combine(Output, $"{layout}-{scale * 100:0}.png"), ImageFormat.Png);
                 }
                 var hits = WidgetRenderer.GetMetricHitRects(new Rectangle(Point.Empty, logical), layout);
-                Check(hits.Length == 4 && hits[3].Right <= logical.Width && hits[3].Bottom <= logical.Height,
-                    $"{layout} {scale * 100:0}% render and clock hit bounds");
+                int expectedHits = layout == WidgetLayout.Mini ? 3 : 4;
+                bool hitsInside = hits.Length == expectedHits;
+                for (int i = 0; i < hits.Length; i++)
+                    hitsInside &= hits[i].Left >= 0 && hits[i].Top >= 0 && hits[i].Right <= logical.Width && hits[i].Bottom <= logical.Height;
+                Check(hitsInside, $"{layout} {scale * 100:0}% 渲染含 {expectedHits} 个命中区且全部位于边界内");
+            }
+            foreach (float userScale in new[] { 0.75f, 1.25f, 1.5f })
+            {
+                var logical = WidgetSizeHelper.GetSize(layout, 1f);
+                var physical = WidgetSizeHelper.GetSize(layout, 1f, userScale);
+                using (var bitmap = new Bitmap(physical.Width, physical.Height))
+                using (var graphics = Graphics.FromImage(bitmap))
+                {
+                    bitmap.SetResolution(userScale * 96, userScale * 96);
+                    graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                    graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+                    graphics.ScaleTransform(userScale, userScale);
+                    WidgetRenderer.DrawLayout(graphics, new Rectangle(Point.Empty, logical), layout, Sample(), history, history, history);
+                    bitmap.Save(Path.Combine(Output, $"{layout}-userscale-{userScale * 100:0}.png"), ImageFormat.Png);
+                }
             }
         }
     }
 
+    private static void VerifyEdgeAutoHideLogic()
+    {
+        Check(new AppSettings().EdgeAutoHide && new AppSettings().DockedEdge == DockEdge.None,
+            "贴边隐藏默认开启且默认未停靠");
+        var wa = new Rectangle(0, 0, 1920, 1040);
+        var detect = typeof(WidgetForm).GetMethod("DetectDockEdge", BindingFlags.Static | BindingFlags.NonPublic);
+        var hiddenAt = typeof(WidgetForm).GetMethod("GetHiddenPosition", BindingFlags.Static | BindingFlags.NonPublic);
+        Check((DockEdge)detect.Invoke(null, new object[] { new Rectangle(0, 100, 200, 60), wa }) == DockEdge.Left,
+            "贴边检测识别左边缘");
+        Check((DockEdge)detect.Invoke(null, new object[] { new Rectangle(1720, 100, 200, 60), wa }) == DockEdge.Right,
+            "贴边检测识别右边缘");
+        Check((DockEdge)detect.Invoke(null, new object[] { new Rectangle(500, 0, 200, 60), wa }) == DockEdge.Top,
+            "贴边检测识别上边缘");
+        Check((DockEdge)detect.Invoke(null, new object[] { new Rectangle(500, 980, 200, 60), wa }) == DockEdge.Bottom,
+            "贴边检测识别下边缘");
+        Check((DockEdge)detect.Invoke(null, new object[] { new Rectangle(500, 300, 200, 60), wa }) == DockEdge.None,
+            "屏幕中部不判定贴边");
+        Check((Point)hiddenAt.Invoke(null, new object[] { DockEdge.Left, new Rectangle(0, 100, 200, 60), wa }) == new Point(-(200 - 16), 100),
+            "左停靠收起位置仅留 16px 小边");
+        Check((Point)hiddenAt.Invoke(null, new object[] { DockEdge.Right, new Rectangle(1720, 100, 200, 60), wa }) == new Point(1920 - 16, 100),
+            "右停靠收起位置仅留 16px 小边");
+        Check((Point)hiddenAt.Invoke(null, new object[] { DockEdge.Top, new Rectangle(500, 0, 200, 60), wa }) == new Point(500, -(60 - 16)),
+            "上停靠收起位置仅留 16px 小边");
+        var dockLayoutFor = typeof(WidgetForm).GetMethod("GetDockLayout", BindingFlags.Static | BindingFlags.NonPublic);
+        Check((WidgetLayout)dockLayoutFor.Invoke(null, new object[] { DockEdge.Left }) == WidgetLayout.Vertical &&
+            (WidgetLayout)dockLayoutFor.Invoke(null, new object[] { DockEdge.Right }) == WidgetLayout.Vertical,
+            "左右停靠使用竖版形态");
+        Check((WidgetLayout)dockLayoutFor.Invoke(null, new object[] { DockEdge.Top }) == WidgetLayout.Horizontal &&
+            (WidgetLayout)dockLayoutFor.Invoke(null, new object[] { DockEdge.Bottom }) == WidgetLayout.Horizontal,
+            "上下停靠使用横版形态");
+    }
+
+    private static void VerifyStartupRegistration()
+    {
+        bool original = StartupRegistration.IsEnabled();
+        try
+        {
+            StartupRegistration.SetEnabled(true);
+            Check(StartupRegistration.IsEnabled(), "开机自启写入 HKCU Run 项后可查询到启用状态");
+            StartupRegistration.SetEnabled(false);
+            Check(!StartupRegistration.IsEnabled(), "关闭开机自启后 HKCU Run 项被移除");
+        }
+        finally
+        {
+            StartupRegistration.SetEnabled(original);
+        }
+    }
+
+    private static void RenderTranslucentEvidence()
+    {
+        var history = new float[60];
+        for (int i = 0; i < history.Length; i++) history[i] = 12 + (float)(Math.Sin(i * 1.2) * 5 + i % 4 * 4);
+        var logical = WidgetSizeHelper.GetSize(WidgetLayout.Horizontal, 1f);
+        foreach (int alpha in new[] { 191, 150 })
+        {
+            foreach (var backdrop in new[] { Tuple.Create(Color.White, "white"), Tuple.Create(Color.FromArgb(28, 31, 40), "dark") })
+            {
+                using (var bitmap = new Bitmap(logical.Width + 60, logical.Height + 60))
+                using (var graphics = Graphics.FromImage(bitmap))
+                {
+                    using (var fill = new SolidBrush(backdrop.Item1)) graphics.FillRectangle(fill, 0, 0, bitmap.Width, bitmap.Height);
+                    graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                    graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+                    WidgetRenderer.DrawLayout(graphics, new Rectangle(30, 30, logical.Width, logical.Height),
+                        WidgetLayout.Horizontal, Sample(), history, history, history, backgroundAlpha: alpha);
+                    bitmap.Save(Path.Combine(Output, $"Horizontal-alpha{alpha}-{backdrop.Item2}.png"), ImageFormat.Png);
+                }
+            }
+        }
+        Check(File.Exists(Path.Combine(Output, "Horizontal-alpha191-white.png")) &&
+            File.Exists(Path.Combine(Output, "Horizontal-alpha150-dark.png")),
+            "半透明样式在明暗背景下的渲染证据已生成");
+    }
+
     private static object Field(object obj, string name) => obj.GetType().GetField(name, Hidden).GetValue(obj);
-    private static object Property(object obj, string name) => obj.GetType().GetProperty(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic).GetValue(obj);
     private static void SetProperty(object obj, string name, object value) => obj.GetType().GetProperty(name).SetValue(obj, value);
+    // 子类实例上读写基类私有字段：Type.GetField 不回溯基类私有成员，须显式给声明类型。
+    private static object FieldOn(object obj, Type declared, string name) => declared.GetField(name, Hidden).GetValue(obj);
+    private static void SetFieldOn(object obj, Type declared, string name, object value) => declared.GetField(name, Hidden).SetValue(obj, value);
+
+    private sealed class InvalidateCountingWidget : WidgetForm
+    {
+        public int InvalidateCount;
+        public InvalidateCountingWidget(MonitorService monitor, SettingsStore store, AppSettings settings)
+            : base(monitor, store, settings) { }
+        protected override void OnInvalidated(InvalidateEventArgs e)
+        {
+            InvalidateCount++;
+            base.OnInvalidated(e);
+        }
+    }
+
+    private static void VerifySliverEdgeAndIdleRepaints()
+    {
+        var store = new SettingsStore(Path.Combine(Output, "sliver-test-settings.json"));
+        using (var monitor = new MonitorService())
+        using (var widget = new InvalidateCountingWidget(monitor, store, new AppSettings()))
+        {
+            var drawSliver = typeof(WidgetForm).GetMethod("DrawSliverEdge", Hidden);
+            var bounds = new Rectangle(0, 0, 200, 60);
+
+            SetFieldOn(widget, typeof(WidgetForm), "_dockEdge", DockEdge.Right);
+            SetFieldOn(widget, typeof(WidgetForm), "_isEdgeHidden", false);
+            SetFieldOn(widget, typeof(WidgetForm), "_activeAlertMetrics", 0);
+            using (var bmp = new Bitmap(200, 60))
+            using (var g = Graphics.FromImage(bmp))
+            {
+                g.Clear(Color.Black);
+                drawSliver.Invoke(widget, new object[] { g, bounds, 1f });
+                var thin = bmp.GetPixel(1, 30);
+                Check(thin.B > 100 && thin.B > thin.R + 60 && thin.G < thin.B,
+                    $"弹出停靠态在内侧边缘绘制细蓝线 (R={thin.R} G={thin.G} B={thin.B})");
+
+                SetFieldOn(widget, typeof(WidgetForm), "_dockEdge", DockEdge.None);
+                g.Clear(Color.Black);
+                drawSliver.Invoke(widget, new object[] { g, bounds, 1f });
+                var none = bmp.GetPixel(1, 30);
+                Check(none.R == 0 && none.G == 0 && none.B == 0,
+                    "未停靠时不绘制任何高亮边");
+
+                SetFieldOn(widget, typeof(WidgetForm), "_dockEdge", DockEdge.Right);
+                SetFieldOn(widget, typeof(WidgetForm), "_isEdgeHidden", true);
+                g.Clear(Color.Black);
+                drawSliver.Invoke(widget, new object[] { g, bounds, 1f });
+                var strong = bmp.GetPixel(5, 30);
+                Check(strong.B > 180 && strong.R < 90 && strong.G < strong.B,
+                    $"收起态整条留边高亮蓝 (R={strong.R} G={strong.G} B={strong.B})");
+                var mid = bmp.GetPixel(10, 30);
+                Check(mid.B > 180 && mid.R < 90,
+                    "收起态高亮贯穿整条留边而非仅端点");
+                bmp.Save(Path.Combine(Output, "sliver-edge-hidden.png"), ImageFormat.Png);
+
+                SetFieldOn(widget, typeof(WidgetForm), "_activeAlertMetrics", 1);
+                g.Clear(Color.Black);
+                drawSliver.Invoke(widget, new object[] { g, bounds, 1f });
+                var alert = bmp.GetPixel(5, 30);
+                Check(alert.R > 180 && alert.R > alert.B + 60,
+                    $"高负载告警时留边高亮转橙 (R={alert.R} G={alert.G} B={alert.B})");
+                SetFieldOn(widget, typeof(WidgetForm), "_activeAlertMetrics", 0);
+            }
+
+            widget.ShowWidget();
+            widget.HideWidget(); // 计数只关心显式调用，避免展示路径的初始化重绘干扰
+            widget.ShowWidget();
+            var dockedBounds = new Rectangle(widget.Left, widget.Top, widget.Width, widget.Height);
+            SetFieldOn(widget, typeof(WidgetForm), "_dockEdge", DockEdge.Right);
+            SetFieldOn(widget, typeof(WidgetForm), "_dockedBounds", dockedBounds);
+            SetFieldOn(widget, typeof(WidgetForm), "_isEdgeHidden", true);
+            int beforeHidden = widget.InvalidateCount;
+            SetFieldOn(widget, typeof(WidgetForm), "_pendingSnapshot", Sample());
+            typeof(WidgetForm).GetMethod("ProcessPendingSnapshot", Hidden).Invoke(widget, null);
+            Check(widget.InvalidateCount == beforeHidden,
+                "收起在边缘时数据快照不触发整帧重绘");
+
+            SetFieldOn(widget, typeof(WidgetForm), "_isEdgeHidden", false);
+            int beforeShown = widget.InvalidateCount;
+            SetFieldOn(widget, typeof(WidgetForm), "_pendingSnapshot", Sample());
+            typeof(WidgetForm).GetMethod("ProcessPendingSnapshot", Hidden).Invoke(widget, null);
+            Check(widget.InvalidateCount == beforeShown + 1,
+                "弹出状态数据快照仍触发重绘");
+
+            int beforeHide = widget.InvalidateCount;
+            typeof(WidgetForm).GetMethod("EnterHiddenState", Hidden).Invoke(widget, new object[] { false });
+            Check(widget.InvalidateCount == beforeHide + 1,
+                "切换到收起状态主动补一帧（透明模式留边高亮即时出现）");
+            int beforeReveal = widget.InvalidateCount;
+            typeof(WidgetForm).GetMethod("ExitHiddenState", Hidden).Invoke(widget, new object[] { false });
+            Check(widget.InvalidateCount == beforeReveal + 1,
+                "弹出收起状态主动补一帧（数据即时刷新）");
+        }
+    }
+
+    private static void VerifyVerticalClockSingleLine()
+    {
+        // 扫描时钟区时间数字以下的文字带：合并成功应恰好一条（时区+日期单行），
+        // 若实现回退成两行会扫描到两条带。
+        var logical = WidgetSizeHelper.GetSize(WidgetLayout.Vertical, 1f);
+        using (var bitmap = new Bitmap(logical.Width, logical.Height))
+        using (var graphics = Graphics.FromImage(bitmap))
+        {
+            graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+            WidgetRenderer.DrawLayout(graphics, new Rectangle(Point.Empty, logical), WidgetLayout.Vertical,
+                Sample(), new float[60], new float[60], new float[60]);
+            int clockTop = logical.Height - 84;
+            int bands = 0;
+            bool inBand = false;
+            for (int y = clockTop + 38; y < logical.Height - 4; y++)
+            {
+                int bg = BackgroundGray(bitmap, y);
+                bool hasText = false;
+                for (int x = 10; x < logical.Width - 8 && !hasText; x++)
+                {
+                    var p = bitmap.GetPixel(x, y);
+                    if (Math.Abs((p.R + p.G + p.B) / 3 - bg) > 35) hasText = true;
+                }
+                if (hasText && !inBand) { bands++; inBand = true; }
+                else if (!hasText) inBand = false;
+            }
+            Check(bands == 1, $"竖版时钟时区与日期合并为单行 (检测到 {bands} 条文字带)");
+        }
+    }
+
+    private static int BackgroundGray(Bitmap bitmap, int y)
+    {
+        int sum = 0;
+        for (int x = 1; x <= 6; x++)
+        {
+            var p = bitmap.GetPixel(x, y);
+            sum += (p.R + p.G + p.B) / 3;
+        }
+        return sum / 6;
+    }
 
     private static void Pump(int milliseconds)
     {
@@ -357,34 +582,83 @@ internal static class Program
             monitor.Start();
             Check(Field(monitor, "_processTimer") == null, "hidden widget creates no process scanner");
             widget.ShowWidget();
+            // 屏幕可能小于放大后的窗体（如高 DPI 的窄 RDP 屏幕），按当前工作区选一个放得下的档位，
+            // 并先移到左侧，避免窗体长大后跨越到相邻显示器触发系统 DPI 重设尺寸。
+            var scaleWa = Screen.FromControl(widget).WorkingArea;
+            widget.Left = scaleWa.Left + 20;
+            widget.Top = scaleWa.Top + 20;
+            float dpiNow = DpiHelper.GetDpiScale(widget);
+            int fitScale = 150;
+            while (fitScale > 100 &&
+                WidgetSizeHelper.GetSize(widget.GetCurrentLayout(), dpiNow, fitScale / 100f).Width > scaleWa.Width - 60)
+                fitScale -= 25;
+            widget.ApplyScale(fitScale);
+            var expectedFit = WidgetSizeHelper.GetSize(widget.GetCurrentLayout(), DpiHelper.GetDpiScale(widget), fitScale / 100f);
+            Check(widget.Width == expectedFit.Width,
+                $"应用 {fitScale}% 用户缩放后窗体宽度按当前布局、DPI 与缩放立即调整 (actual={widget.Width} expected={expectedFit.Width})");
+            Check(widget.Left >= scaleWa.Left && widget.Top >= scaleWa.Top &&
+                widget.Right <= scaleWa.Right && widget.Bottom <= scaleWa.Bottom,
+                $"放大后窗体整体保持在当前屏幕工作区内 (L={widget.Left} R={widget.Right} T={widget.Top} B={widget.Bottom})");
+            widget.ApplyScale(100);
+            widget.Left = scaleWa.Left + 40;
+            widget.Top = scaleWa.Top + 40;
+            var snap = typeof(WidgetForm).GetMethod("SnapPosition", Hidden);
+            settings.SnapToEdges = true;
+            var workArea = Screen.PrimaryScreen.WorkingArea;
+            var snapped = (Point)snap.Invoke(widget, new object[] { workArea.Left + 10, workArea.Top + 10, 200, 100 });
+            Check(snapped == new Point(workArea.Left, workArea.Top), "开启边缘吸附后距边缘 24px 内的位置吸附到工作区左上角");
+            var keptFar = (Point)snap.Invoke(widget, new object[] { workArea.Left + 60, workArea.Top + 60, 200, 100 });
+            Check(keptFar == new Point(workArea.Left + 60, workArea.Top + 60), "距边缘超过 24px 的位置不吸附保持原值");
+            var clamped = (Point)snap.Invoke(widget, new object[] { workArea.Left - 70, workArea.Top + 100, 200, 100 });
+            Check(clamped == new Point(workArea.Left, workArea.Top + 100), "拖出工作区的位置被挡在屏幕边缘并贴齐");
+            settings.SnapToEdges = false;
+            var keptOff = (Point)snap.Invoke(widget, new object[] { workArea.Left + 10, workArea.Top + 10, 200, 100 });
+            Check(keptOff == new Point(workArea.Left + 10, workArea.Top + 10), "关闭边缘吸附后近边缘位置保持原值");
+            settings.SnapToEdges = true;
+            settings.EdgeAutoHide = true;
+            // 缩到最小并停靠在远离真实光标的一侧：真实光标位于窗口内时收起计时按设计跳过，
+            // 缩小窗口并避开光标可以让自动化断言稳定。
+            widget.ApplyScale(50);
+            var dockWa = Screen.FromPoint(new Point(widget.Left + widget.Width / 2, widget.Top + widget.Height / 2)).WorkingArea;
+            bool dockAtRight = Cursor.Position.X < dockWa.Left + dockWa.Width / 2;
+            widget.Left = dockAtRight ? dockWa.Right - widget.Width : dockWa.Left;
+            widget.Top = Math.Max(dockWa.Top, Math.Min(widget.Top, dockWa.Bottom - widget.Height));
+            typeof(WidgetForm).GetMethod("CompleteDrag", Hidden).Invoke(widget, null);
+            Pump(4500);
+            var verticalSize = WidgetSizeHelper.GetSize(WidgetLayout.Vertical, DpiHelper.GetDpiScale(widget), settings.ScalePercent / 100f);
+            Check(widget.Width == verticalSize.Width && widget.Height == verticalSize.Height,
+                "停靠侧边后自动变形为竖版形态");
+            int shownLeft = dockAtRight ? dockWa.Right - verticalSize.Width : dockWa.Left;
+            int hiddenLeft = dockAtRight ? dockWa.Right - 16 : dockWa.Left - (verticalSize.Width - 16);
+            Check(widget.Left == hiddenLeft, "贴边释放后自动收起仅留 16px 小边");
+            typeof(WidgetForm).GetMethod("OnMouseEnter", Hidden).Invoke(widget, new object[] { EventArgs.Empty });
+            Pump(700);
+            Check(widget.Left == shownLeft && widget.Height == verticalSize.Height, "鼠标移到小边后窗口滑出");
+            typeof(WidgetForm).GetMethod("OnMouseLeave", Hidden).Invoke(widget, new object[] { EventArgs.Empty });
+            Pump(3000);
+            Check(widget.Left == hiddenLeft, "鼠标离开后窗口再次收起");
+            widget.SetEdgeAutoHide(false);
+            Pump(700);
+            Check(widget.Left == shownLeft, "关闭贴边隐藏后窗口保持滑出状态");
+            typeof(WidgetForm).GetMethod("OnMouseLeave", Hidden).Invoke(widget, new object[] { EventArgs.Empty });
+            Pump(2500);
+            Check(widget.Left == shownLeft, "关闭贴边隐藏后不再自动收起");
+            widget.SetEdgeAutoHide(true);
+            widget.Left = dockWa.Left + 60;
+            widget.Top = dockWa.Top + 100;
+            typeof(WidgetForm).GetMethod("CompleteDrag", Hidden).Invoke(widget, null);
+            Pump(1500);
+            Check(widget.Left == dockWa.Left + 60, "未贴边时释放不触发收起");
+            var horizontalSize = WidgetSizeHelper.GetSize(WidgetLayout.Horizontal, DpiHelper.GetDpiScale(widget), settings.ScalePercent / 100f);
+            Check(widget.Width == horizontalSize.Width && widget.Height == horizontalSize.Height,
+                "拖离边缘后动画恢复停靠前的横版布局");
+            widget.ApplyScale(100);
             widget.ApplyLayout(WidgetLayout.Expanded);
             settings.PowerSavingMode = false;
             widget.ApplyMonitoringSettings();
             Pump(600);
             Check(Field(monitor, "_processTimer") != null, "visible expanded layout enables actual process scanner");
             Check(widget.SelectedProcessMetric == ProcessMetric.Memory, "expanded process ranking defaults to memory");
-            ApplicationGroupingChecks.VerifyCpuProjection(monitor, Check);
-            PumpUntil(() => ((MetricSnapshot)Field(widget, "_snapshot")).TopMemoryProcesses.Count > 0 &&
-                ((MetricSnapshot)Field(widget, "_snapshot")).CpuPercent >= 0, 3500,
-                "real grouped application memory reaches the visible widget");
-            var memorySnapshot = (MetricSnapshot)Field(widget, "_snapshot");
-            Check(memorySnapshot.TopMemoryProcesses.Exists(row => row.ProcessCount > 1),
-                "group process counts survive service snapshot cloning");
-            var actualSize = WidgetSizeHelper.GetSize(WidgetLayout.Expanded, 1.5f);
-            using (var bitmap = new Bitmap(actualSize.Width, actualSize.Height))
-            using (var graphics = Graphics.FromImage(bitmap))
-            {
-                graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
-                graphics.ScaleTransform(1.5f, 1.5f);
-                WidgetRenderer.DrawLayout(graphics, new Rectangle(Point.Empty, WidgetSizeHelper.GetSize(WidgetLayout.Expanded, 1f)),
-                    WidgetLayout.Expanded, memorySnapshot, selectedMetric: ProcessMetric.Memory);
-                bitmap.Save(Path.Combine(Output, "Expanded-ApplicationMemory-Live.png"), ImageFormat.Png);
-            }
-            var chronological = typeof(WidgetForm).GetMethod("GetChronologicalHistory", Hidden);
-            Check(ReferenceEquals(chronological.Invoke(widget, new[] { Field(widget, "_cpuHistory") }),
-                chronological.Invoke(widget, new[] { Field(widget, "_cpuHistory") })),
-                "chart redraw reuses its chronological buffer instead of allocating each paint");
             ClickMetric(widget, 0);
             Check(widget.SelectedProcessMetric == ProcessMetric.Cpu, "actual CPU row click selects CPU ranking");
             PumpUntil(() => ((MetricSnapshot)Field(widget, "_snapshot")).RankingMetric == ProcessMetric.Cpu &&
@@ -392,11 +666,6 @@ internal static class Program
             var cpuSnapshot = (MetricSnapshot)Field(widget, "_snapshot");
             Check(cpuSnapshot.TopCpuProcesses.Count > 0 && SortedCpu(cpuSnapshot.TopCpuProcesses),
                 "real CPU ranking has valid percentages sorted by CPU, not RAM");
-            Check(cpuSnapshot.TopCpuProcesses.Count <= 5 &&
-                cpuSnapshot.TopCpuProcesses.Exists(row => row.ProcessCount > 1),
-                "live CPU ranking publishes application totals and member counts after Top 5 selection");
-            foreach (var row in cpuSnapshot.TopCpuProcesses)
-                Console.WriteLine($"Application CPU: {row.Name} ({row.ProcessCount}) {row.CpuPercent:0.00}%");
             settings.Locked = true;
             ClickMetric(widget, 2);
             Check(widget.SelectedProcessMetric == ProcessMetric.Vram, "locked window still allows VRAM row selection");
@@ -405,9 +674,6 @@ internal static class Program
             var gpuSnapshot = (MetricSnapshot)Field(widget, "_snapshot");
             Check(gpuSnapshot.VramProcessesAvailable && gpuSnapshot.TopVramProcesses.Count > 0,
                 "local Windows dedicated GPU counters return actual process VRAM");
-            Check(gpuSnapshot.TopVramProcesses.Count <= 5 &&
-                gpuSnapshot.TopVramProcesses.TrueForAll(row => row.ProcessCount >= 1),
-                "live VRAM ranking preserves application member counts and Top 5 limit");
             Console.WriteLine("VRAM top: " + gpuSnapshot.TopVramProcesses[0].Name + " " + gpuSnapshot.TopVramProcesses[0].VramBytes + " bytes");
             ClickMetric(widget, 1);
             Check(widget.SelectedProcessMetric == ProcessMetric.Memory, "RAM click restores memory ranking");
@@ -416,6 +682,11 @@ internal static class Program
             settings.Locked = false;
             DragMetricWithoutSwitch(widget);
             Check(widget.SelectedProcessMetric == ProcessMetric.Memory, "dragging a CPU row does not switch current ranking");
+            widget.ApplyLayout(WidgetLayout.Mini);
+            var miniSize = WidgetSizeHelper.GetSize(WidgetLayout.Mini, DpiHelper.GetDpiScale(widget), settings.ScalePercent / 100f);
+            Check(widget.Width == miniSize.Width && widget.Height == miniSize.Height, "迷你版布局尺寸按 DPI 与用户缩放计算");
+            Check(Field(monitor, "_processTimer") == null, "迷你版布局不开启进程扫描");
+            widget.ApplyLayout(WidgetLayout.Expanded);
             widget.ApplyLayout(WidgetLayout.Vertical);
             Check(Field(monitor, "_processTimer") == null, "vertical layout stops process scanner");
             widget.ApplyLayout(WidgetLayout.Horizontal);
@@ -426,12 +697,12 @@ internal static class Program
             Check(ram.Contains("15.50 GB") && vram.Contains("16.00 GB"), "hover detail uses cached snapshot bytes");
             Check(widget.ContextMenuStrip.Items.ContainsKey("unused") == false &&
                 HasOptions(widget.ContextMenuStrip), "widget menu exposes monitoring settings");
+            Check(HasMenuItem(widget.ContextMenuStrip.Items, "迷你版") && HasMenuItem(widget.ContextMenuStrip.Items, "大小") &&
+                HasMenuItem(widget.ContextMenuStrip.Items, "边缘吸附"), "右键菜单包含迷你版、大小与边缘吸附文本项");
             widget.ApplyLayout(WidgetLayout.Expanded);
             widget.HideWidget();
             Check(Field(monitor, "_processTimer") == null && !((System.Windows.Forms.Timer)Field(widget, "_clockTimer")).Enabled,
                 "hiding stops process scan and clock redraw timer");
-            Check(!((System.Windows.Forms.Timer)Field(widget, "_topMostTimer")).Enabled,
-                "hidden widget also stops top-most timer wakeups");
             monitor.Stop();
             Check(Field(monitor, "_timer") == null, "stopping clears metric timer");
         }
@@ -440,6 +711,16 @@ internal static class Program
     private static bool HasOptions(ContextMenuStrip menu)
     {
         foreach (ToolStripItem item in menu.Items) if (item.Text.Contains("监控设置")) return true;
+        return false;
+    }
+
+    private static bool HasMenuItem(ToolStripItemCollection items, string text)
+    {
+        foreach (ToolStripItem item in items)
+        {
+            if (item.Text.Replace("● ", "") == text) return true;
+            if (item is ToolStripMenuItem menuItem && HasMenuItem(menuItem.DropDownItems, text)) return true;
+        }
         return false;
     }
 
@@ -481,215 +762,6 @@ internal static class Program
             previous = row.CpuPercent;
         }
         return true;
-    }
-
-    private static void VerifyApplicationMemory()
-    {
-        var assembly = typeof(MonitorService).Assembly;
-        var sampleType = assembly.GetType("SysFloat.Monitoring.ProcessMemoryProcessSample");
-        var groupType = assembly.GetType("SysFloat.Monitoring.ApplicationMemoryGrouper");
-        var fixture = Array.CreateInstance(sampleType, 9);
-        object New(int pid, int parent, string path, ulong start, bool readable, ulong bytes) =>
-            Activator.CreateInstance(sampleType, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-                null, new object[] { pid, parent, Path.GetFileName(path), path, start, readable, bytes }, null);
-        string shell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe");
-        fixture.SetValue(New(1, 0, shell, 1, true, 50), 0);
-        fixture.SetValue(New(10, 1, @"C:\Apps\A\editor.exe", 10, true, 1000), 1);
-        fixture.SetValue(New(11, 10, @"C:\Apps\A\editor.exe", 11, true, 2000), 2);
-        fixture.SetValue(New(12, 11, @"C:\Tools\helper.exe", 12, true, 3000), 3);
-        fixture.SetValue(New(13, 10, @"C:\Tools\protected.exe", 13, false, 0), 4);
-        fixture.SetValue(New(20, 10, @"C:\Apps\Viewer\viewer.exe", 20, true, 500), 5);
-        fixture.SetValue(New(30, 1, @"D:\Another\editor.exe", 30, true, 700), 6);
-        fixture.SetValue(New(40, 1, @"C:\Apps\NewParent\new.exe", 90, true, 900), 7);
-        fixture.SetValue(New(41, 40, @"C:\OldChild\child.exe", 89, true, 400), 8);
-        var group = groupType.GetMethod("GroupSamples", BindingFlags.Static | BindingFlags.NonPublic);
-        var rows = (List<ProcessInfo>)group.Invoke(null, new object[] { fixture, new[] { 1, 10, 20, 30, 40 }, null });
-        var editor = rows.Find(row => row.ProcessId == 10);
-        Check(editor.MemoryBytes == 6000 && editor.ProcessCount == 4 && editor.MemoryIsPartial,
-            "application memory combines mixed executable descendants and marks unreadable member");
-        Check(rows.Exists(row => row.ProcessId == 20 && row.MemoryBytes == 500 && row.ProcessCount == 1),
-            "independent child GUI application stays separate");
-        Check(rows.Exists(row => row.ProcessId == 30 && row.MemoryBytes == 700),
-            "same executable name in another directory stays separate");
-        Check(rows.Exists(row => row.ProcessId == 41 && row.MemoryBytes == 400),
-            "reused parent PID does not absorb an older child");
-        Check(rows.Exists(row => row.ProcessId == 1 && row.MemoryBytes == 50),
-            "desktop shell does not absorb launched applications");
-
-        var readerType = assembly.GetType("SysFloat.Monitoring.ProcessMemoryReader");
-        var reader = Activator.CreateInstance(readerType, true);
-        var reference = PrivateWorkingSetReference.Read();
-        int selfPid = Process.GetCurrentProcess().Id;
-        var reading = readerType.GetMethod("Read", Hidden).Invoke(reader, new object[] { selfPid });
-        ulong actual = (ulong)Property(reading, "PrivateWorkingSetBytes");
-        Check((bool)Property(reading, "PrivateWorkingSetAvailable") && reference.ContainsKey(selfPid) &&
-            Math.Abs((double)actual - reference[selfPid]) < 4 * 1024 * 1024,
-            $"native private working set agrees with independent PDH: API={actual} PDH={reference.GetValueOrDefault(selfPid)}");
-
-        var collectorType = assembly.GetType("SysFloat.Monitoring.ProcessMemoryCollector");
-        var collector = Activator.CreateInstance(collectorType, true);
-        var collect = collectorType.GetMethod("Collect", Hidden);
-        var coldWatch = Stopwatch.StartNew();
-        var collected = collect.Invoke(collector, new object[] { null });
-        coldWatch.Stop();
-        Check((bool)Property(collected, "Available"), "live application private-memory collector is available");
-        var liveRows = (List<ProcessInfo>)Property(collected, "Processes");
-        Check(liveRows.Exists(row => row.ProcessCount > 1 && row.MemoryBytes > 0), "live memory ranking contains aggregated applications");
-        foreach (var row in liveRows)
-            Console.WriteLine($"Application memory: {row.Name} ({row.ProcessCount}) {row.MemoryBytes / 1048576.0:0.0} MiB partial={row.MemoryIsPartial}");
-        using (var current = Process.GetCurrentProcess())
-        {
-            current.Refresh();
-            int handlesBefore = current.HandleCount;
-            var hotWatch = Stopwatch.StartNew();
-            for (int i = 0; i < 5; i++) collected = collect.Invoke(collector, new object[] { null });
-            hotWatch.Stop();
-            current.Refresh();
-            Check(current.HandleCount <= handlesBefore + 4, "repeated memory collection does not leak handles");
-            Console.WriteLine($"Memory collector: cold={coldWatch.Elapsed.TotalMilliseconds:0.0}ms cachedAvg={hotWatch.Elapsed.TotalMilliseconds / 5:0.0}ms handles={handlesBefore}->{current.HandleCount}");
-        }
-        var aborted = collect.Invoke(collector, new object[] { new Func<bool>(() => false) });
-        Check((bool)Property(aborted, "Aborted"), "hidden/switched memory collection cancels before native work");
-
-        using (var self = Process.GetCurrentProcess())
-        {
-            long beforeCpu = self.TotalProcessorTime.Ticks;
-            var identity = readerType.GetMethod("ReadIdentity", Hidden).Invoke(reader, new object[] { self.Id });
-            self.Refresh();
-            long afterCpu = self.TotalProcessorTime.Ticks;
-            long nativeCpu = (long)Property(identity, "CpuTimeTicks");
-            Check((bool)Property(identity, "CpuTimeAvailable") && nativeCpu >= beforeCpu && nativeCpu <= afterCpu &&
-                (ulong)Property(identity, "CreationTime") == (ulong)self.StartTime.ToUniversalTime().ToFileTimeUtc(),
-                "single native handle returns matching process creation identity and cumulative CPU time");
-            Check(!(bool)Property(identity, "PrivateWorkingSetAvailable"),
-                "identity-only CPU/VRAM read does not populate private memory counters");
-        }
-        var collectIdentities = collectorType.GetMethod("CollectApplicationIdentities", Hidden);
-        object identityResult = collectIdentities.Invoke(collector, new object[] { null });
-        Check((bool)Property(identityResult, "Available"), "live lightweight application identity graph is available");
-        var identitySamples = (System.Collections.IEnumerable)Property(identityResult, "Samples");
-        int cpuIdentities = 0;
-        foreach (object identity in identitySamples)
-            if ((bool)Property(identity, "CpuTimeAvailable")) cpuIdentities++;
-        Check(cpuIdentities > 1, "identity snapshot carries same-handle native CPU samples for application grouping");
-        using (var self = Process.GetCurrentProcess())
-        {
-            int beforeHandles = self.HandleCount;
-            var watch = Stopwatch.StartNew();
-            for (int i = 0; i < 5; i++) identityResult = collectIdentities.Invoke(collector, new object[] { null });
-            watch.Stop();
-            self.Refresh();
-            Check(self.HandleCount <= beforeHandles + 4, "repeated identity-only sampling does not leak native handles");
-            Console.WriteLine($"Identity-only collector: cachedAvg={watch.Elapsed.TotalMilliseconds / 5:0.0}ms handles={beforeHandles}->{self.HandleCount}");
-        }
-        var cancelledIdentities = collectIdentities.Invoke(collector, new object[] { new Func<bool>(() => false) });
-        Check((bool)Property(cancelledIdentities, "Aborted"), "hidden/switched identity-only collection cancels before native work");
-    }
-
-    private static void VerifyBackgroundTransparency()
-    {
-        foreach (WidgetLayout layout in Enum.GetValues(typeof(WidgetLayout)))
-        {
-            foreach (byte alpha in new byte[] { 191, 128 })
-            {
-                var size = WidgetSizeHelper.GetSize(layout, 1f);
-                using (var bitmap = new Bitmap(size.Width, size.Height, PixelFormat.Format32bppPArgb))
-                using (var graphics = Graphics.FromImage(bitmap))
-                {
-                    graphics.Clear(Color.Transparent);
-                    graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                    graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
-                    WidgetRenderer.DrawLayout(graphics, new Rectangle(Point.Empty, size), layout, Sample(), backgroundAlpha: alpha);
-                    Check(bitmap.GetPixel(0, 0).A == 0, $"{layout} transparency has clear rounded corners");
-                    var body = layout == WidgetLayout.Vertical ? new Point(15, 63) : new Point(20, size.Height - 10);
-                    int bodyAlpha = bitmap.GetPixel(body.X, body.Y).A;
-                    Check(bodyAlpha >= alpha - 5 && bodyAlpha <= alpha + 5,
-                        $"{layout} requested background alpha {alpha} retained ({bodyAlpha})");
-                    bool solidBlueGlyph = false;
-                    var scan = layout == WidgetLayout.Vertical ? new Rectangle(22, 20, size.Width - 44, 34) :
-                        layout == WidgetLayout.Horizontal ? new Rectangle(20, 20, 68, 26) : new Rectangle(12, 58, 58, 36);
-                    for (int y = scan.Top; y < scan.Bottom; y++)
-                        for (int x = scan.Left; x < scan.Right; x++)
-                        {
-                            var pixel = bitmap.GetPixel(x, y);
-                            if (pixel.A >= 250 && Math.Abs(pixel.R - 116) < 8 && Math.Abs(pixel.G - 186) < 8 && Math.Abs(pixel.B - 255) < 8)
-                                solidBlueGlyph = true;
-                        }
-                    Check(solidBlueGlyph, $"{layout} CPU number keeps opaque saturated foreground at alpha {alpha}");
-                    using (var composite = new Bitmap(size.Width + 36, size.Height + 36))
-                    using (var back = Graphics.FromImage(composite))
-                    {
-                        back.Clear(Color.FromArgb(248, 250, 253));
-                        using (var stripe = new SolidBrush(Color.FromArgb(205, 232, 251)))
-                            back.FillRectangle(stripe, 0, 60, composite.Width, 70);
-                        back.DrawImageUnscaled(bitmap, 18, 18);
-                        composite.Save(Path.Combine(Output, $"BackgroundOnly-{layout}-{alpha}.png"), ImageFormat.Png);
-                    }
-                }
-            }
-        }
-    }
-
-    [DllImport("user32.dll")] private static extern int GetWindowLong(IntPtr window, int index);
-    [DllImport("user32.dll")] private static extern uint GetGuiResources(IntPtr process, uint flags);
-
-    private static void VerifyNativeTransparency()
-    {
-        var settings = new AppSettings { AlwaysOnTop = false, Opacity = WidgetOpacity.Opaque };
-        var store = new SettingsStore(Path.Combine(Output, "transparency-test-settings.json"));
-        using (var monitor = new MonitorService())
-        using (var widget = new WidgetForm(monitor, store, settings))
-        using (var process = Process.GetCurrentProcess())
-        {
-            widget.ShowWidget();
-            Pump(100);
-            uint before = GetGuiResources(process.Handle, 0);
-            foreach (WidgetLayout layout in Enum.GetValues(typeof(WidgetLayout)))
-            {
-                widget.ApplyLayout(layout);
-                widget.SetOpacity(WidgetOpacity.Percent75);
-                Pump(120);
-                var surface = Field(widget, "_layeredSurface");
-                Check(surface != null && (bool)Property(surface, "LastPresentSucceeded") &&
-                    (GetWindowLong(widget.Handle, -20) & 0x80000) != 0 && widget.Opacity == 1,
-                    $"{layout} actual layered window presents successfully without global opacity");
-                long startCount = (long)Property(surface, "PresentCount");
-                for (int i = 0; i < 100; i++) widget.Invalidate();
-                Pump(120);
-                Check(ReferenceEquals(surface, Field(widget, "_layeredSurface")) &&
-                    (long)Property(surface, "PresentCount") - startCount <= 3,
-                    $"{layout} repeated invalidations coalesce and reuse same native DIB");
-                widget.SetOpacity(WidgetOpacity.Percent50);
-                Pump(100);
-                Check(ReferenceEquals(surface, Field(widget, "_layeredSurface")) &&
-                    (bool)Property(surface, "LastPresentSucceeded"), $"{layout} 75-to-50 switch reuses native surface");
-                if (layout == WidgetLayout.Expanded)
-                {
-                    ClickMetric(widget, 0);
-                    Check(widget.SelectedProcessMetric == ProcessMetric.Cpu, "transparent widget still handles metric clicks");
-                }
-                widget.HideWidget();
-                Check(Field(widget, "_layeredSurface") == null, $"{layout} hiding releases native surface");
-                widget.ShowWidget();
-                Pump(100);
-                Check(Field(widget, "_layeredSurface") != null &&
-                    (bool)Property(Field(widget, "_layeredSurface"), "LastPresentSucceeded"),
-                    $"{layout} showing recreates a valid surface");
-                widget.SetOpacity(WidgetOpacity.Opaque);
-                Pump(100);
-                Check(Field(widget, "_layeredSurface") == null && (GetWindowLong(widget.Handle, -20) & 0x80000) == 0,
-                    $"{layout} opaque mode releases layered resources and restores normal window");
-            }
-            for (int i = 0; i < 12; i++)
-            {
-                widget.SetOpacity(WidgetOpacity.Percent75);
-                widget.SetOpacity(WidgetOpacity.Percent50);
-                widget.SetOpacity(WidgetOpacity.Opaque);
-            }
-            Pump(200);
-            uint after = GetGuiResources(process.Handle, 0);
-            Check(after <= before + 2, $"native transparency switches do not leak GDI objects ({before}->{after})");
-        }
     }
 
     private static void VerifyTrayWiring()

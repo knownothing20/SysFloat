@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -22,12 +22,14 @@ namespace SysFloat.UI
         private static readonly Color Alert = Color.FromArgb(255, 174, 91);
         private static readonly Font LabelFont = CreateLogicalFont(8.5f, FontStyle.Bold);
         private static readonly Font ValueFont = CreateLogicalFont(13.5f, FontStyle.Bold);
-        private static readonly Font DetailFont = CreateLogicalFont(7.7f, FontStyle.Regular);
+        private static readonly Font DetailFont = CreateLogicalFont(8.5f, FontStyle.Regular);
         private static readonly Font ClockFont = CreateLogicalFont(15.5f, FontStyle.Bold);
-        private static readonly Font ClockSmallFont = CreateLogicalFont(7.5f, FontStyle.Regular);
+        private static readonly Font ClockSmallFont = CreateLogicalFont(8.5f, FontStyle.Regular);
         private static readonly Font TitleFont = CreateLogicalFont(9.5f, FontStyle.Bold);
         private static readonly Font ProcessFont = CreateLogicalFont(8.2f, FontStyle.Regular);
         private static readonly Font ProcessValueFont = CreateLogicalFont(8.2f, FontStyle.Bold);
+        private static readonly Font MiniLabelFont = CreateLogicalFont(7.5f, FontStyle.Bold);
+        private static readonly Font MiniValueFont = CreateLogicalFont(10.5f, FontStyle.Bold);
 
         public static void DrawHorizontal(Graphics g, Rectangle bounds, MetricSnapshot snapshot, int alertThreshold = 90, bool alertsEnabled = true, int activeAlertMetrics = 7, int backgroundAlpha = 255)
         {
@@ -106,6 +108,31 @@ namespace SysFloat.UI
             DrawSelectionBridge(g, rightX, activeY, MetricColor(selectedMetric));
         }
 
+        public static void DrawMini(Graphics g, Rectangle bounds, MetricSnapshot snapshot, int alertThreshold = 90, bool alertsEnabled = true, int activeAlertMetrics = 7, int backgroundAlpha = 255)
+        {
+            DrawPanel(g, bounds, 12, backgroundAlpha);
+            Color muted = GetMutedColor(backgroundAlpha);
+            int sectionWidth = bounds.Width / 3;
+            string[] labels = { "CPU", "RAM", "VRAM" };
+            float[] values = { snapshot.CpuPercent, snapshot.MemoryPercent, snapshot.VramPercent };
+            Color[] colors = { Cpu, Ram, Vram };
+            for (int i = 0; i < 3; i++)
+            {
+                int cellX = bounds.X + i * sectionWidth;
+                int cellWidth = i == 2 ? bounds.Right - cellX : sectionWidth;
+                var area = new Rectangle(cellX, bounds.Y, cellWidth, bounds.Height);
+                var labelSize = g.MeasureString(labels[i], MiniLabelFont);
+                using (var brush = new SolidBrush(muted))
+                    g.DrawString(labels[i], MiniLabelFont, brush, area.X + (area.Width - labelSize.Width) / 2f, area.Y + 3);
+                string valueText = HasSample(values[i]) ? string.Format("{0:0}%", values[i]) : "--";
+                var valueSize = g.MeasureString(valueText, MiniValueFont);
+                using (var brush = new SolidBrush(ValueColor(values[i], colors[i], alertThreshold, alertsEnabled && (activeAlertMetrics & (1 << i)) != 0)))
+                    g.DrawString(valueText, MiniValueFont, brush, area.X + (area.Width - valueSize.Width) / 2f, area.Y + 14);
+                DrawUsageBar(g, area.X + area.Width * 0.2f, area.Bottom - 6, area.Width * 0.6f, values[i], colors[i]);
+                if (i > 0) DrawDivider(g, area.X, bounds.Y + 8, bounds.Bottom - 8);
+            }
+        }
+
         public static Rectangle GetCloseButtonRect(Rectangle bounds, WidgetLayout layout)
         {
             return layout == WidgetLayout.Expanded ? new Rectangle(bounds.Right - 32, bounds.Y + 10, 18, 18) : Rectangle.Empty;
@@ -122,6 +149,11 @@ namespace SysFloat.UI
             {
                 int height = (bounds.Height - 84) / 3;
                 return new[] { new Rectangle(bounds.X, bounds.Y, bounds.Width, height), new Rectangle(bounds.X, bounds.Y + height, bounds.Width, height), new Rectangle(bounds.X, bounds.Y + 2 * height, bounds.Width, bounds.Height - 84 - 2 * height), new Rectangle(bounds.X, bounds.Bottom - 84, bounds.Width, 84) };
+            }
+            if (layout == WidgetLayout.Mini)
+            {
+                int width = bounds.Width / 3;
+                return new[] { new Rectangle(bounds.X, bounds.Y, width, bounds.Height), new Rectangle(bounds.X + width, bounds.Y, width, bounds.Height), new Rectangle(bounds.X + 2 * width, bounds.Y, bounds.Width - 2 * width, bounds.Height) };
             }
             int leftWidth = (int)Math.Round(bounds.Width * 0.55f);
             int contentTop = bounds.Y + 42;
@@ -143,6 +175,9 @@ namespace SysFloat.UI
                 case WidgetLayout.Expanded:
                     DrawExpanded(g, bounds, snapshot, cpuHistory ?? CreateEmptyHistory(), ramHistory ?? CreateEmptyHistory(),
                         vramHistory ?? CreateEmptyHistory(), isCloseHover, alertThreshold, alertsEnabled, 7, selectedMetric, backgroundAlpha);
+                    break;
+                case WidgetLayout.Mini:
+                    DrawMini(g, bounds, snapshot, alertThreshold, alertsEnabled, 7, backgroundAlpha);
                     break;
                 default:
                     DrawHorizontal(g, bounds, snapshot, alertThreshold, alertsEnabled, 7, backgroundAlpha);
@@ -176,18 +211,10 @@ namespace SysFloat.UI
                 var top = Color.FromArgb(backgroundAlpha, 27, 39, 59);
                 var bottom = Color.FromArgb(backgroundAlpha, 16, 23, 36);
                 using (var fill = new LinearGradientBrush(bounds, top, bottom, LinearGradientMode.Vertical))
-                using (var outline = new Pen(Color.FromArgb(Math.Min(255, backgroundAlpha + 52), 91, 119, 154), 1f))
+                using (var outline = new Pen(Color.FromArgb(150, 82, 94, 116), 1f))
                 {
                     g.FillPath(fill, path);
                     g.DrawPath(outline, path);
-                }
-
-                using (var highlight = new Pen(Color.FromArgb(Math.Min(255, backgroundAlpha + 36), 130, 157, 190), 1f))
-                {
-                    // A restrained edge highlight makes the translucent surface read as glass
-                    // without adding blur, animation, or per-frame effects.
-                    g.DrawArc(highlight, bounds.X + 2, bounds.Y + 1, Math.Max(1, radius * 2 - 4), Math.Max(1, radius * 2 - 4), 180, 90);
-                    g.DrawLine(highlight, bounds.X + radius, bounds.Y + 1, bounds.Right - radius, bounds.Y + 1);
                 }
             }
         }
@@ -208,7 +235,7 @@ namespace SysFloat.UI
             var valueSize = g.MeasureString(valueText, ValueFont);
             using (var brush = new SolidBrush(muted)) g.DrawString(label, LabelFont, brush, area.X + (area.Width - labelSize.Width) / 2f, area.Y + 5);
             using (var brush = new SolidBrush(ValueColor(value, color, threshold, alertsEnabled))) g.DrawString(valueText, ValueFont, brush, area.X + (area.Width - valueSize.Width) / 2f, area.Y + 20);
-            DrawUsageBar(g, area.X + area.Width * 0.25f, area.Bottom - 7, area.Width * 0.5f, value, color);
+            DrawUsageBar(g, area.X + area.Width * 0.15f, area.Bottom - 7, area.Width * 0.7f, value, color);
         }
 
         private static void DrawVerticalMetric(Graphics g, Rectangle area, string label, float value, Color color, int threshold, bool alertsEnabled, Color muted)
@@ -232,13 +259,17 @@ namespace SysFloat.UI
             if (vertical)
             {
                 var ts = g.MeasureString(time, ValueFont);
-                using (var brush = new SolidBrush(Text)) g.DrawString(time, ValueFont, brush, area.X + (area.Width - ts.Width) / 2f, area.Y + 4);
-                string label = "太平洋";
-                var ls = g.MeasureString(label, ClockSmallFont);
-                using (var brush = new SolidBrush(muted)) g.DrawString(label, ClockSmallFont, brush, area.X + (area.Width - ls.Width) / 2f, area.Y + 39);
-                string subtitle = zone + "  " + date;
+                using (var brush = new SolidBrush(Text)) g.DrawString(time, ValueFont, brush, area.X + (area.Width - ts.Width) / 2f, area.Y + 6);
+                // 时区与日期合并为一行；竖版 92px 窄面板放不下带"太平洋"前缀的整行时
+                // 退化为 "PDT 10/23"，保底单行（完整地名在横版副标题与悬停提示里）。
+                string subtitle = "太平洋 " + zone + " " + date;
                 var ss = g.MeasureString(subtitle, ClockSmallFont);
-                using (var brush = new SolidBrush(muted)) g.DrawString(subtitle, ClockSmallFont, brush, area.X + (area.Width - ss.Width) / 2f, area.Y + 56);
+                if (ss.Width > area.Width)
+                {
+                    subtitle = zone + " " + date;
+                    ss = g.MeasureString(subtitle, ClockSmallFont);
+                }
+                using (var brush = new SolidBrush(muted)) g.DrawString(subtitle, ClockSmallFont, brush, area.X + (area.Width - ss.Width) / 2f, area.Y + 54);
             }
             else
             {
@@ -377,9 +408,11 @@ namespace SysFloat.UI
                 emptyMessage = "暂无内存占用进程";
             }
 
+            int topCount = Math.Min(5, processes == null ? 0 : processes.Count);
+            if (topCount > 0) title = title.Replace("Top 5", "Top " + topCount);
             using (var brush = new SolidBrush(accent)) g.DrawString(title, LabelFont, brush, bounds.X + 10, bounds.Y + 7);
             using (var brush = new SolidBrush(muted)) g.DrawString(subtitle, DetailFont, brush, bounds.X + 10, bounds.Y + 23);
-            using (var pen = new Pen(Color.FromArgb(100, accent), 1f)) g.DrawLine(pen, bounds.X + 10, bounds.Y + 39, bounds.Right - 10, bounds.Y + 39);
+            using (var pen = new Pen(Color.FromArgb(90, 150, 159, 176), 1f)) g.DrawLine(pen, bounds.X + 10, bounds.Y + 39, bounds.Right - 10, bounds.Y + 39);
 
             string unavailableMessage = null;
             if (snapshot.RankingMetric != selectedMetric)
@@ -410,7 +443,8 @@ namespace SysFloat.UI
             }
 
             int count = Math.Min(5, processes.Count);
-            int rowHeight = Math.Max(30, (bounds.Bottom - listTop - 5) / 5);
+            // 行高按实际行数分配，进程不足 5 个时列表撑满卡片，不再留大片空白。
+            int rowHeight = Math.Max(30, Math.Min(56, (bounds.Bottom - listTop - 5) / Math.Max(1, count)));
             for (int i = 0; i < count; i++)
             {
                 ProcessInfo process = processes[i];
@@ -467,8 +501,9 @@ namespace SysFloat.UI
 
         private static void DrawUsageBar(Graphics g, float x, float y, float width, float value, Color color)
         {
-            var bounds = new RectangleF(x, y, Math.Max(12f, width), 2f);
-            using (var background = new SolidBrush(Color.FromArgb(65, 75, 91))) g.FillRectangle(background, bounds);
+            var bounds = new RectangleF(x, y, Math.Max(12f, width), 3f);
+            // 轨道用半透明叠印而非固定灰：明暗背景与不同透明档下都能与面板拉开层次。
+            using (var background = new SolidBrush(Color.FromArgb(60, 0, 0, 0))) g.FillRectangle(background, bounds);
             if (HasSample(value))
             {
                 float fillWidth = bounds.Width * Math.Max(0, Math.Min(100, value)) / 100f;
@@ -485,12 +520,12 @@ namespace SysFloat.UI
 
         private static void DrawDivider(Graphics g, int x, int y1, int y2)
         {
-            using (var pen = new Pen(Border, 1f)) g.DrawLine(pen, x, y1, x, y2);
+            using (var pen = new Pen(Color.FromArgb(60, 0, 0, 0))) g.DrawLine(pen, x, y1, x, y2);
         }
 
         private static void DrawHorizontalDivider(Graphics g, int x1, int y, int x2)
         {
-            using (var pen = new Pen(Border, 1f)) g.DrawLine(pen, x1, y, x2, y);
+            using (var pen = new Pen(Color.FromArgb(60, 0, 0, 0))) g.DrawLine(pen, x1, y, x2, y);
         }
 
         public static GraphicsPath CreateRoundedRectPath(Rectangle rect, int radius)

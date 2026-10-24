@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
@@ -123,6 +123,29 @@ namespace SysFloat
             expandedItem.Click += (s, e) => _widgetForm.ApplyLayout(WidgetLayout.Expanded);
             menu.Items.Add(expandedItem);
 
+            var miniItem = new ToolStripMenuItem("迷你版");
+            miniItem.Click += (s, e) => _widgetForm.ApplyLayout(WidgetLayout.Mini);
+            menu.Items.Add(miniItem);
+
+            var sizeMenu = new ToolStripMenuItem("大小");
+            var trayScale75 = new ToolStripMenuItem("75%");
+            trayScale75.Click += (s, e) => { _widgetForm.ApplyScale(75); UpdateTrayMenuChecks(menu); };
+            sizeMenu.DropDownItems.Add(trayScale75);
+            var trayScale100 = new ToolStripMenuItem("100%");
+            trayScale100.Click += (s, e) => { _widgetForm.ApplyScale(100); UpdateTrayMenuChecks(menu); };
+            sizeMenu.DropDownItems.Add(trayScale100);
+            var trayScale125 = new ToolStripMenuItem("125%");
+            trayScale125.Click += (s, e) => { _widgetForm.ApplyScale(125); UpdateTrayMenuChecks(menu); };
+            sizeMenu.DropDownItems.Add(trayScale125);
+            var trayScale150 = new ToolStripMenuItem("150%");
+            trayScale150.Click += (s, e) => { _widgetForm.ApplyScale(150); UpdateTrayMenuChecks(menu); };
+            sizeMenu.DropDownItems.Add(trayScale150);
+            sizeMenu.DropDownItems.Add(new ToolStripSeparator());
+            var trayScaleHint = new ToolStripMenuItem("提示：Ctrl+滚轮 微调大小");
+            trayScaleHint.Enabled = false;
+            sizeMenu.DropDownItems.Add(trayScaleHint);
+            menu.Items.Add(sizeMenu);
+
             menu.Items.Add(new ToolStripSeparator());
 
             var topMostItem = new ToolStripMenuItem("始终置顶");
@@ -142,6 +165,33 @@ namespace SysFloat
                 UpdateTrayMenuChecks(menu);
             };
             menu.Items.Add(lockItem);
+
+            var snapItem = new ToolStripMenuItem("边缘吸附");
+            snapItem.Click += (s, e) =>
+            {
+                _settings.SnapToEdges = !_settings.SnapToEdges;
+                _settingsStore.Save(_settings);
+                _widgetForm.UpdateMenuChecks();
+                UpdateTrayMenuChecks(menu);
+            };
+            menu.Items.Add(snapItem);
+
+            var trayAutoStart = new ToolStripMenuItem("开机自启");
+            trayAutoStart.Click += (s, e) =>
+            {
+                StartupRegistration.SetEnabled(!StartupRegistration.IsEnabled());
+                _widgetForm.UpdateMenuChecks();
+                UpdateTrayMenuChecks(menu);
+            };
+            menu.Items.Add(trayAutoStart);
+
+            var edgeHideItem = new ToolStripMenuItem("贴边隐藏");
+            edgeHideItem.Click += (s, e) =>
+            {
+                _widgetForm.SetEdgeAutoHide(!_settings.EdgeAutoHide);
+                UpdateTrayMenuChecks(menu);
+            };
+            menu.Items.Add(edgeHideItem);
 
             menu.Items.Add(new ToolStripSeparator());
 
@@ -166,7 +216,7 @@ namespace SysFloat
             menu.Items.Add(new ToolStripSeparator());
 
             var aboutItem = new ToolStripMenuItem("关于");
-            aboutItem.Click += (s, e) => MessageBox.Show("SysFloat v1.0\n轻量级系统监控悬浮窗",
+            aboutItem.Click += (s, e) => MessageBox.Show("SysFloat v1.2\n轻量级系统监控悬浮窗",
                 "关于 SysFloat", MessageBoxButtons.OK, MessageBoxIcon.Information);
             menu.Items.Add(aboutItem);
 
@@ -181,26 +231,50 @@ namespace SysFloat
 
         private void UpdateTrayMenuChecks(ContextMenuStrip menu)
         {
-            for (int i = 0; i < menu.Items.Count; i++)
+            UpdateTrayItemsChecks(menu.Items);
+        }
+
+        private void UpdateTrayItemsChecks(ToolStripItemCollection items)
+        {
+            for (int i = 0; i < items.Count; i++)
             {
-                if (menu.Items[i] is ToolStripMenuItem item)
+                if (items[i] is ToolStripMenuItem item)
                 {
-                    if (item.Text == "横版")
+                    string baseText = item.Text.Replace("● ", "");
+                    if (baseText == "横版")
                         item.Checked = _widgetForm.GetCurrentLayout() == WidgetLayout.Horizontal;
-                    else if (item.Text == "竖版")
+                    else if (baseText == "竖版")
                         item.Checked = _widgetForm.GetCurrentLayout() == WidgetLayout.Vertical;
-                    else if (item.Text == "展开版")
+                    else if (baseText == "展开版")
                         item.Checked = _widgetForm.GetCurrentLayout() == WidgetLayout.Expanded;
-                    else if (item.Text == "始终置顶")
+                    else if (baseText == "迷你版")
+                        item.Checked = _widgetForm.GetCurrentLayout() == WidgetLayout.Mini;
+                    else if (baseText == "始终置顶")
                         item.Checked = _settings.AlwaysOnTop;
-                    else if (item.Text == "锁定位置")
+                    else if (baseText == "锁定位置")
                         item.Checked = _settings.Locked;
-                    else if (item.Text == "背景不透明")
+                    else if (baseText == "边缘吸附")
+                        item.Checked = _settings.SnapToEdges;
+                    else if (baseText == "贴边隐藏")
+                        item.Checked = _settings.EdgeAutoHide;
+                    else if (baseText == "开机自启")
+                        item.Checked = StartupRegistration.IsEnabled();
+                    else if (baseText == "背景不透明")
                         item.Checked = _settings.Opacity == WidgetOpacity.Opaque;
-                    else if (item.Text == "背景 75%")
+                    else if (baseText == "背景 75%")
                         item.Checked = _settings.Opacity == WidgetOpacity.Percent75;
-                    else if (item.Text == "背景 50%")
+                    else if (baseText == "背景 50%")
                         item.Checked = _settings.Opacity == WidgetOpacity.Percent50;
+                    else if (baseText == "75%")
+                        item.Checked = _settings.ScalePercent == 75;
+                    else if (baseText == "100%")
+                        item.Checked = _settings.ScalePercent == 100;
+                    else if (baseText == "125%")
+                        item.Checked = _settings.ScalePercent == 125;
+                    else if (baseText == "150%")
+                        item.Checked = _settings.ScalePercent == 150;
+                    if (item.DropDownItems.Count > 0)
+                        UpdateTrayItemsChecks(item.DropDownItems);
                 }
             }
         }
@@ -259,7 +333,10 @@ namespace SysFloat
             bool allOk = snapshot.CpuPercent >= 0 && snapshot.MemoryPercent >= 0;
             var desiredIcon = alert.IsHighLoad ? _alertIcon : allOk ? _normalIcon : _disabledIcon;
             if (!ReferenceEquals(_notifyIcon.Icon, desiredIcon)) _notifyIcon.Icon = desiredIcon;
-            _notifyIcon.Text = $"SysFloat\nCPU {FormatPercent(snapshot.CpuPercent)} · RAM {FormatPercent(snapshot.MemoryPercent)} · VRAM {FormatPercent(snapshot.VramAvailable ? snapshot.VramPercent : -1)}";
+            // 托盘文本只在内容变化时更新（通常是整百分比变化才变），避免每秒无效赋值。
+            string trayText = $"SysFloat\nCPU {FormatPercent(snapshot.CpuPercent)} · RAM {FormatPercent(snapshot.MemoryPercent)} · VRAM {FormatPercent(snapshot.VramAvailable ? snapshot.VramPercent : -1)}";
+            if (!string.Equals(_notifyIcon.Text, trayText, StringComparison.Ordinal))
+                _notifyIcon.Text = trayText;
 
             if (alert.JustActivated && _settings.AlertPopupEnabled &&
                 (_lastPopupAt < 0 || now - _lastPopupAt >= 300000))
@@ -279,8 +356,9 @@ namespace SysFloat
         {
             if (_closing) return;
             _closing = true;
-            _settings.Left = _widgetForm.Left;
-            _settings.Top = _widgetForm.Top;
+            var persistPosition = _widgetForm.GetPersistPosition();
+            _settings.Left = persistPosition.X;
+            _settings.Top = persistPosition.Y;
             _settingsStore.Save(_settings);
 
             _monitorService.Stop();

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Runtime.InteropServices;
@@ -49,11 +49,25 @@ namespace SysFloat.UI
         private ToolTip _metricToolTip;
         private Rectangle[] _metricHitRects = new Rectangle[0];
         private int _activeMetric = -1;
+        private bool _handCursorActive;
         private volatile bool _disposed;
         private int _activeAlertMetrics;
         private LayeredWidgetSurface _layeredSurface;
         private int _layeredRenderQueued;
         private int _layeredRenderGeneration;
+
+        private const int EdgeSliverSize = 16;
+        private DockEdge _dockEdge = DockEdge.None;
+        private Rectangle _dockedBounds;
+        private bool _isEdgeHidden;
+        private Rectangle _slideTarget;
+        private Rectangle _slideBoundsWa;
+        private bool _slideResizes;
+        private bool _pendingHideAfterSlide;
+        private WidgetLayout? _preDockLayout;
+        private System.Windows.Forms.Timer _slideTimer;       // 15ms，向 _slideTarget 滑动/形变
+        private System.Windows.Forms.Timer _hideCountdown;    // 600ms，贴边释放后收起
+        private System.Windows.Forms.Timer _revealCountdown;  // 800ms，鼠标离开后收起
 
         private const int WsExLayered = 0x00080000;
         private const uint SwpNoZOrder = 0x0004;
@@ -67,6 +81,8 @@ namespace SysFloat.UI
 
         public ProcessMetric SelectedProcessMetric => _selectedProcessMetric;
 
+        private float UserScale => Math.Max(0.5f, Math.Min(2f, (_settings?.ScalePercent ?? 100) / 100f));
+
         public WidgetForm(MonitorService monitorService, SettingsStore settingsStore, AppSettings settings)
         {
             _monitorService = monitorService;
@@ -79,6 +95,7 @@ namespace SysFloat.UI
             SetupContextMenu();
             SetupTopMostTimer();
             SetupClockTimer();
+            SetupDockTimers();
             _metricToolTip = new ToolTip { AutomaticDelay = 350, ReshowDelay = 150, AutoPopDelay = 12000, ShowAlways = true };
 
             _monitorService.OnDataUpdated += OnDataUpdated;
@@ -95,7 +112,7 @@ namespace SysFloat.UI
             BackColor = Color.FromArgb(25, 30, 45);
             DoubleBuffered = true;
 
-            var size = WidgetSizeHelper.GetSize(_currentLayout, 1.0f);
+            var size = WidgetSizeHelper.GetSize(_currentLayout, 1.0f, UserScale);
             Size = size;
         }
 
@@ -134,6 +151,29 @@ namespace SysFloat.UI
             expandedItem.Click += (s, e) => ApplyLayout(WidgetLayout.Expanded);
             _contextMenu.Items.Add(expandedItem);
 
+            var miniItem = new ToolStripMenuItem("迷你版");
+            miniItem.Click += (s, e) => ApplyLayout(WidgetLayout.Mini);
+            _contextMenu.Items.Add(miniItem);
+
+            var sizeMenu = new ToolStripMenuItem("大小");
+            var scale75Item = new ToolStripMenuItem("75%");
+            scale75Item.Click += (s, e) => ApplyScale(75);
+            sizeMenu.DropDownItems.Add(scale75Item);
+            var scale100Item = new ToolStripMenuItem("100%");
+            scale100Item.Click += (s, e) => ApplyScale(100);
+            sizeMenu.DropDownItems.Add(scale100Item);
+            var scale125Item = new ToolStripMenuItem("125%");
+            scale125Item.Click += (s, e) => ApplyScale(125);
+            sizeMenu.DropDownItems.Add(scale125Item);
+            var scale150Item = new ToolStripMenuItem("150%");
+            scale150Item.Click += (s, e) => ApplyScale(150);
+            sizeMenu.DropDownItems.Add(scale150Item);
+            sizeMenu.DropDownItems.Add(new ToolStripSeparator());
+            var scaleHintItem = new ToolStripMenuItem("提示：Ctrl+滚轮 微调大小");
+            scaleHintItem.Enabled = false;
+            sizeMenu.DropDownItems.Add(scaleHintItem);
+            _contextMenu.Items.Add(sizeMenu);
+
             _contextMenu.Items.Add(new ToolStripSeparator());
 
             var topMostItem = new ToolStripMenuItem("始终置顶");
@@ -148,6 +188,27 @@ namespace SysFloat.UI
                 UpdateMenuChecks();
             };
             _contextMenu.Items.Add(lockItem);
+
+            var snapItem = new ToolStripMenuItem("边缘吸附");
+            snapItem.Click += (s, e) =>
+            {
+                _settings.SnapToEdges = !_settings.SnapToEdges;
+                _settingsStore.Save(_settings);
+                UpdateMenuChecks();
+            };
+            _contextMenu.Items.Add(snapItem);
+
+            var autoStartItem = new ToolStripMenuItem("开机自启");
+            autoStartItem.Click += (s, e) =>
+            {
+                StartupRegistration.SetEnabled(!StartupRegistration.IsEnabled());
+                UpdateMenuChecks();
+            };
+            _contextMenu.Items.Add(autoStartItem);
+
+            var edgeHideItem = new ToolStripMenuItem("贴边隐藏");
+            edgeHideItem.Click += (s, e) => SetEdgeAutoHide(!_settings.EdgeAutoHide);
+            _contextMenu.Items.Add(edgeHideItem);
 
             _contextMenu.Items.Add(new ToolStripSeparator());
 
@@ -172,7 +233,7 @@ namespace SysFloat.UI
             _contextMenu.Items.Add(new ToolStripSeparator());
 
             var aboutItem = new ToolStripMenuItem("关于");
-            aboutItem.Click += (s, e) => MessageBox.Show("SysFloat v1.0\n轻量级系统监控", "关于 SysFloat",
+            aboutItem.Click += (s, e) => MessageBox.Show("SysFloat v1.2\n轻量级系统监控悬浮窗", "关于 SysFloat",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
             _contextMenu.Items.Add(aboutItem);
 
@@ -180,38 +241,63 @@ namespace SysFloat.UI
             exitItem.Click += (s, e) => CloseClicked?.Invoke();
             _contextMenu.Items.Add(exitItem);
 
+            // 菜单关闭后若鼠标不在窗口上，恢复“离开后自动收起”的倒计时。
+            _contextMenu.Closed += (s, e) =>
+            {
+                if (_dockEdge != DockEdge.None && !_isEdgeHidden && _settings.EdgeAutoHide &&
+                    !Bounds.Contains(Cursor.Position))
+                    _revealCountdown.Start();
+            };
+
             ContextMenuStrip = _contextMenu;
         }
 
         public void UpdateMenuChecks()
         {
-            string[] layoutTexts = { "横版", "竖版", "展开版" };
-            WidgetLayout[] layouts = { WidgetLayout.Horizontal, WidgetLayout.Vertical, WidgetLayout.Expanded };
+            string[] layoutTexts = { "横版", "竖版", "展开版", "迷你版" };
+            WidgetLayout[] layouts = { WidgetLayout.Horizontal, WidgetLayout.Vertical, WidgetLayout.Expanded, WidgetLayout.Mini };
             string[] opacityTexts = { "背景不透明", "背景 75%", "背景 50%" };
             WidgetOpacity[] opacities = { WidgetOpacity.Opaque, WidgetOpacity.Percent75, WidgetOpacity.Percent50 };
+            string[] scaleTexts = { "75%", "100%", "125%", "150%" };
+            int[] scaleValues = { 75, 100, 125, 150 };
 
-            for (int i = 0; i < _contextMenu.Items.Count; i++)
+            void UpdateItems(ToolStripItemCollection items)
             {
-                if (_contextMenu.Items[i] is ToolStripMenuItem item)
+                for (int i = 0; i < items.Count; i++)
                 {
-                    string baseText = item.Text.Replace("● ", "");
-                    bool isChecked = false;
-
-                    for (int j = 0; j < layoutTexts.Length; j++)
+                    if (items[i] is ToolStripMenuItem item)
                     {
-                        if (baseText == layoutTexts[j]) { isChecked = _currentLayout == layouts[j]; break; }
-                    }
-                    if (!isChecked && baseText == "始终置顶") isChecked = _settings.AlwaysOnTop;
-                    if (!isChecked && baseText == "锁定位置") isChecked = _settings.Locked;
-                    for (int j = 0; j < opacityTexts.Length; j++)
-                    {
-                        if (baseText == opacityTexts[j]) { isChecked = _settings.Opacity == opacities[j]; break; }
-                    }
+                        string baseText = item.Text.Replace("● ", "");
+                        bool isChecked = false;
 
-                    item.Text = isChecked ? "● " + baseText : baseText;
-                    item.Checked = isChecked;
+                        for (int j = 0; j < layoutTexts.Length; j++)
+                        {
+                            if (baseText == layoutTexts[j]) { isChecked = _currentLayout == layouts[j]; break; }
+                        }
+                        if (!isChecked && baseText == "始终置顶") isChecked = _settings.AlwaysOnTop;
+                        if (!isChecked && baseText == "锁定位置") isChecked = _settings.Locked;
+                        if (!isChecked && baseText == "边缘吸附") isChecked = _settings.SnapToEdges;
+                        if (!isChecked && baseText == "贴边隐藏") isChecked = _settings.EdgeAutoHide;
+                        if (!isChecked && baseText == "开机自启") isChecked = StartupRegistration.IsEnabled();
+                        for (int j = 0; j < opacityTexts.Length; j++)
+                        {
+                            if (baseText == opacityTexts[j]) { isChecked = _settings.Opacity == opacities[j]; break; }
+                        }
+                        for (int j = 0; j < scaleTexts.Length; j++)
+                        {
+                            if (baseText == scaleTexts[j]) { isChecked = _settings.ScalePercent == scaleValues[j]; break; }
+                        }
+
+                        item.Text = isChecked ? "● " + baseText : baseText;
+                        item.Checked = isChecked;
+
+                        if (item.DropDownItems.Count > 0)
+                            UpdateItems(item.DropDownItems);
+                    }
                 }
             }
+
+            UpdateItems(_contextMenu.Items);
         }
 
         public void SetOpacity(WidgetOpacity opacity)
@@ -262,7 +348,7 @@ namespace SysFloat.UI
             switch (_settings?.Opacity ?? WidgetOpacity.Opaque)
             {
                 case WidgetOpacity.Percent75: return 191;
-                case WidgetOpacity.Percent50: return 128;
+                case WidgetOpacity.Percent50: return 150;
                 default: return 255;
             }
         }
@@ -283,10 +369,15 @@ namespace SysFloat.UI
         public void ApplyLayout(WidgetLayout layout, bool save = true)
         {
             _currentLayout = layout;
-            if (save) _settings.Layout = layout;
+            if (save)
+            {
+                _settings.Layout = layout;
+                // 用户显式选择布局后，拖离边缘不再自动恢复旧布局。
+                _preDockLayout = null;
+            }
 
             float dpiScale = DpiHelper.GetDpiScale(this);
-            var size = WidgetSizeHelper.GetSize(layout, dpiScale);
+            var size = WidgetSizeHelper.GetSize(layout, dpiScale, UserScale);
 
             int rightEdge = Right;
             int topEdge = Top;
@@ -313,13 +404,39 @@ namespace SysFloat.UI
             ApplyMonitoringSettings();
 
             Invalidate();
+            ReapplyDockAfterResize();
+        }
+
+        public void ApplyScale(int scalePercent, bool save = true)
+        {
+            scalePercent = Math.Max(50, Math.Min(200, scalePercent));
+            scalePercent = (int)Math.Round(scalePercent / 5.0) * 5;
+            _settings.ScalePercent = scalePercent;
+            float dpiScale = DpiHelper.GetDpiScale(this);
+            var size = WidgetSizeHelper.GetSize(_currentLayout, dpiScale, UserScale);
+            // 一次性设置位置与尺寸并钳制在当前屏内：放大时若跨越到相邻显示器，
+            // 系统会按邻屏 DPI 重设窗体尺寸（混合 DPI 多屏），导致尺寸与所在屏不一致。
+            var wa = Screen.FromPoint(new Point(Left + Width / 2, Top + Height / 2)).WorkingArea;
+            int newLeft = Math.Max(wa.Left, Math.Min(Left, wa.Right - size.Width));
+            int newTop = Math.Max(wa.Top, Math.Min(Top, wa.Bottom - size.Height));
+            Bounds = new Rectangle(newLeft, newTop, size.Width, size.Height);
+            SetRoundedRegion();
+            HideMetricToolTip();
+            UpdateMetricHitRects();
+            Invalidate();
+            if (save)
+            {
+                _settingsStore.Save(_settings);
+                UpdateMenuChecks();
+            }
+            ReapplyDockAfterResize();
         }
 
         private void SetRoundedRegion()
         {
             if (!IsHandleCreated) return;
             var bounds = new Rectangle(0, 0, Width, Height);
-            int radius = (int)Math.Round(GetCornerRadius(_currentLayout) * (Math.Max(1, DeviceDpi) / 96f));
+            int radius = (int)Math.Round(GetCornerRadius(_currentLayout) * (Math.Max(1, DeviceDpi) / 96f) * UserScale);
             using (var gp = WidgetRenderer.CreateRoundedRectPath(bounds, radius))
             {
                 var oldRegion = Region;
@@ -335,6 +452,7 @@ namespace SysFloat.UI
                 case WidgetLayout.Horizontal: return 18;
                 case WidgetLayout.Vertical: return 16;
                 case WidgetLayout.Expanded: return 14;
+                case WidgetLayout.Mini: return 12;
                 default: return 18;
             }
         }
@@ -357,6 +475,58 @@ namespace SysFloat.UI
             {
                 _clockTimer.Interval = MillisecondsUntilNextMinute();
                 if (Visible) Invalidate();
+            };
+        }
+
+        private void SetupDockTimers()
+        {
+            _slideTimer = new System.Windows.Forms.Timer { Interval = 15 };
+            _slideTimer.Tick += (s, e) =>
+            {
+                int dx = _slideTarget.X - Left;
+                int dy = _slideTarget.Y - Top;
+                int dw = _slideTarget.Width - Width;
+                int dh = _slideTarget.Height - Height;
+                if (dx == 0 && dy == 0 && dw == 0 && dh == 0)
+                {
+                    CompleteSlide();
+                    return;
+                }
+                // 每轴按距离 1/4（至少 2px）推进，且不越过目标。
+                Left += Math.Sign(dx) * Math.Min(Math.Abs(dx), Math.Max(2, Math.Abs(dx) / 4));
+                Top += Math.Sign(dy) * Math.Min(Math.Abs(dy), Math.Max(2, Math.Abs(dy) / 4));
+                if (dw != 0 || dh != 0)
+                {
+                    Width += Math.Sign(dw) * Math.Min(Math.Abs(dw), Math.Max(2, Math.Abs(dw) / 4));
+                    Height += Math.Sign(dh) * Math.Min(Math.Abs(dh), Math.Max(2, Math.Abs(dh) / 4));
+                    // 形变时尺寸增长优先向屏幕内让位，避免中途跨越到相邻显示器触发 DPI 重设。
+                    if (!_slideBoundsWa.IsEmpty && Width <= _slideBoundsWa.Width && Right > _slideBoundsWa.Right)
+                        Left = _slideBoundsWa.Right - Width;
+                    if (!_slideBoundsWa.IsEmpty && Height <= _slideBoundsWa.Height && Bottom > _slideBoundsWa.Bottom)
+                        Top = _slideBoundsWa.Bottom - Height;
+                    SetRoundedRegion();
+                }
+                if (Left == _slideTarget.X && Top == _slideTarget.Y &&
+                    Width == _slideTarget.Width && Height == _slideTarget.Height)
+                    CompleteSlide();
+            };
+
+            _hideCountdown = new System.Windows.Forms.Timer { Interval = 600 };
+            _hideCountdown.Tick += (s, e) =>
+            {
+                _hideCountdown.Stop();
+                // 右键菜单打开时暂缓收起，菜单关闭后由 Closed 处理重新计起。
+                if (_settings.EdgeAutoHide && _dockEdge != DockEdge.None && !_isDragging && !_contextMenu.Visible)
+                    EnterHiddenState(true);
+            };
+
+            _revealCountdown = new System.Windows.Forms.Timer { Interval = 800 };
+            _revealCountdown.Tick += (s, e) =>
+            {
+                _revealCountdown.Stop();
+                if (_settings.EdgeAutoHide && _dockEdge != DockEdge.None && !_isEdgeHidden &&
+                    !_contextMenu.Visible && !Bounds.Contains(Cursor.Position))
+                    EnterHiddenState(true);
             };
         }
 
@@ -397,8 +567,11 @@ namespace SysFloat.UI
             if (!IsHandleCreated) return;
             if (_settings.AlwaysOnTop)
             {
+                // 置顶计时器每 3 秒重申一次 z 序；样式位已置时跳过 SetWindowLong，
+                // 避免每次触发样式变更消息。SetWindowPos 对已置顶窗口开销极小。
                 int exStyle = NativeMethods.GetWindowLong(Handle, NativeMethods.GWL_EXSTYLE);
-                NativeMethods.SetWindowLong(Handle, NativeMethods.GWL_EXSTYLE, exStyle | NativeMethods.WS_EX_TOPMOST);
+                if ((exStyle & NativeMethods.WS_EX_TOPMOST) == 0)
+                    NativeMethods.SetWindowLong(Handle, NativeMethods.GWL_EXSTYLE, exStyle | NativeMethods.WS_EX_TOPMOST);
                 NativeMethods.SetWindowPos(Handle, NativeMethods.HWND_TOPMOST,
                     0, 0, 0, 0,
                     NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
@@ -443,11 +616,12 @@ namespace SysFloat.UI
         protected override void OnDpiChanged(DpiChangedEventArgs e)
         {
             base.OnDpiChanged(e);
-            var size = WidgetSizeHelper.GetSize(_currentLayout, Math.Max(1, DeviceDpi) / 96f);
+            var size = WidgetSizeHelper.GetSize(_currentLayout, Math.Max(1, DeviceDpi) / 96f, UserScale);
             Size = size;
             SetRoundedRegion();
             UpdateMetricHitRects();
             Invalidate();
+            ReapplyDockAfterResize();
         }
 
         public void SetTopMost(bool topMost)
@@ -464,6 +638,7 @@ namespace SysFloat.UI
 
         public void ShowWidget()
         {
+            bool wasVisible = Visible;
             _settings.Visible = true;
             if (!IsHandleCreated)
             {
@@ -476,6 +651,7 @@ namespace SysFloat.UI
             UpdateMetricHitRects();
             ApplyMonitoringSettings();
             _settingsStore.Save(_settings);
+            if (wasVisible && _isEdgeHidden) ExitHiddenState(true);
         }
 
         public void HideWidget()
@@ -490,7 +666,7 @@ namespace SysFloat.UI
         public void SetInitialPosition()
         {
             float dpiScale = DpiHelper.GetDpiScale(this);
-            var size = WidgetSizeHelper.GetSize(_currentLayout, dpiScale);
+            var size = WidgetSizeHelper.GetSize(_currentLayout, dpiScale, UserScale);
 
             if (_settings.Left >= 0 && _settings.Top >= 0)
             {
@@ -506,15 +682,259 @@ namespace SysFloat.UI
             }
 
             Size = size;
+
+            // 上次收起在边缘：本次直接以收起状态出现，不闪；停靠方向决定横版/竖版形态。
+            if (_settings.DockedEdge != DockEdge.None && _settings.EdgeAutoHide)
+            {
+                _dockEdge = _settings.DockedEdge;
+                var dockLayout = GetDockLayout(_dockEdge);
+                if (_currentLayout != dockLayout)
+                {
+                    _preDockLayout = _currentLayout;
+                    _currentLayout = dockLayout;
+                }
+                var dockSize = WidgetSizeHelper.GetSize(dockLayout, dpiScale, UserScale);
+                var wa = Screen.FromPoint(new Point(Left + Width / 2, Top + Height / 2)).WorkingArea;
+                int alongX = Math.Max(wa.Left, Math.Min(Left, wa.Right - dockSize.Width));
+                int alongY = Math.Max(wa.Top, Math.Min(Top, wa.Bottom - dockSize.Height));
+                switch (_dockEdge)
+                {
+                    case DockEdge.Left: _dockedBounds = new Rectangle(wa.Left, alongY, dockSize.Width, dockSize.Height); break;
+                    case DockEdge.Right: _dockedBounds = new Rectangle(wa.Right - dockSize.Width, alongY, dockSize.Width, dockSize.Height); break;
+                    case DockEdge.Top: _dockedBounds = new Rectangle(alongX, wa.Top, dockSize.Width, dockSize.Height); break;
+                    case DockEdge.Bottom: _dockedBounds = new Rectangle(alongX, wa.Bottom - dockSize.Height, dockSize.Width, dockSize.Height); break;
+                }
+                Size = dockSize;
+                Location = GetHiddenPosition(_dockEdge, _dockedBounds, wa);
+                _isEdgeHidden = true;
+            }
+            else
+            {
+                _settings.DockedEdge = DockEdge.None;
+            }
         }
 
         private void EnsureOnScreen()
         {
-            var screen = Screen.FromPoint(new Point(Left, Top)).WorkingArea;
+            var screen = Screen.FromPoint(new Point(Left + Width / 2, Top + Height / 2)).WorkingArea;
             if (Left < screen.Left) Left = screen.Left;
             if (Top < screen.Top) Top = screen.Top;
             if (Right > screen.Right) Left = screen.Right - Width;
             if (Bottom > screen.Bottom) Top = screen.Bottom - Height;
+        }
+
+        private const int EdgeSnapThreshold = 24;
+
+        private Point SnapPosition(int left, int top, int width, int height)
+        {
+            if (!_settings.SnapToEdges) return new Point(left, top);
+            var screen = Screen.FromPoint(new Point(left + width / 2, top + height / 2)).WorkingArea;
+            if (Math.Abs(left - screen.Left) <= EdgeSnapThreshold) left = screen.Left;
+            else if (Math.Abs(left + width - screen.Right) <= EdgeSnapThreshold) left = screen.Right - width;
+            if (Math.Abs(top - screen.Top) <= EdgeSnapThreshold) top = screen.Top;
+            else if (Math.Abs(top + height - screen.Bottom) <= EdgeSnapThreshold) top = screen.Bottom - height;
+            // 拖到屏幕边界即停住贴齐，窗口不允许被推出工作区。
+            left = Math.Max(screen.Left, Math.Min(left, screen.Right - width));
+            top = Math.Max(screen.Top, Math.Min(top, screen.Bottom - height));
+            return new Point(left, top);
+        }
+
+        // ===== 贴边自动隐藏 =====
+
+        private static DockEdge DetectDockEdge(Rectangle bounds, Rectangle workingArea)
+        {
+            if (Math.Abs(bounds.Left - workingArea.Left) <= 2) return DockEdge.Left;
+            if (Math.Abs(bounds.Right - workingArea.Right) <= 2) return DockEdge.Right;
+            if (Math.Abs(bounds.Top - workingArea.Top) <= 2) return DockEdge.Top;
+            if (Math.Abs(bounds.Bottom - workingArea.Bottom) <= 2) return DockEdge.Bottom;
+            return DockEdge.None;
+        }
+
+        private static Point GetHiddenPosition(DockEdge edge, Rectangle bounds, Rectangle workingArea)
+        {
+            int alongX = Math.Max(workingArea.Left, Math.Min(bounds.X, workingArea.Right - bounds.Width));
+            int alongY = Math.Max(workingArea.Top, Math.Min(bounds.Y, workingArea.Bottom - bounds.Height));
+            switch (edge)
+            {
+                case DockEdge.Left: return new Point(workingArea.Left - (bounds.Width - EdgeSliverSize), alongY);
+                case DockEdge.Right: return new Point(workingArea.Right - EdgeSliverSize, alongY);
+                case DockEdge.Top: return new Point(alongX, workingArea.Top - (bounds.Height - EdgeSliverSize));
+                case DockEdge.Bottom: return new Point(alongX, workingArea.Bottom - EdgeSliverSize);
+                default: return bounds.Location;
+            }
+        }
+
+        private static WidgetLayout GetDockLayout(DockEdge edge)
+        {
+            return edge == DockEdge.Left || edge == DockEdge.Right ? WidgetLayout.Vertical : WidgetLayout.Horizontal;
+        }
+
+        private void CompleteDrag()
+        {
+            CancelDockTimers();
+            _settings.Left = Left;
+            _settings.Top = Top;
+            var wa = Screen.FromPoint(new Point(Left + Width / 2, Top + Height / 2)).WorkingArea;
+            _dockEdge = DetectDockEdge(Bounds, wa);
+            _isEdgeHidden = false;
+
+            if (_dockEdge == DockEdge.None)
+            {
+                _settings.DockedEdge = DockEdge.None;
+                // 拖离边缘：动画恢复停靠前的布局。
+                if (_preDockLayout.HasValue && _preDockLayout.Value != _currentLayout)
+                {
+                    var restore = _preDockLayout.Value;
+                    _preDockLayout = null;
+                    _currentLayout = restore;
+                    var size = WidgetSizeHelper.GetSize(restore, DpiHelper.GetDpiScale(this), UserScale);
+                    int left = Math.Max(wa.Left, Math.Min(Left, wa.Right - size.Width));
+                    int top = Math.Max(wa.Top, Math.Min(Top, wa.Bottom - size.Height));
+                    UpdateMenuChecks();
+                    SlideBoundsTo(new Rectangle(left, top, size.Width, size.Height));
+                }
+                else
+                {
+                    _preDockLayout = null;
+                }
+                _settingsStore.Save(_settings);
+                PositionChanged?.Invoke();
+                return;
+            }
+
+            _dockedBounds = Bounds;
+            _settings.DockedEdge = _dockEdge;
+
+            // 贴边隐藏开启时按边缘方向重塑：顶部/底部用横版，左右用竖版；用户布局偏好保留，拖离后恢复。
+            if (_settings.EdgeAutoHide)
+            {
+                var dockLayout = GetDockLayout(_dockEdge);
+                if (!_preDockLayout.HasValue) _preDockLayout = _currentLayout;
+                if (_currentLayout != dockLayout || Size != WidgetSizeHelper.GetSize(dockLayout, DpiHelper.GetDpiScale(this), UserScale))
+                {
+                    var size = WidgetSizeHelper.GetSize(dockLayout, DpiHelper.GetDpiScale(this), UserScale);
+                    int alongX, alongY;
+                    if (_dockEdge == DockEdge.Left || _dockEdge == DockEdge.Right)
+                    {
+                        alongX = _dockEdge == DockEdge.Left ? wa.Left : wa.Right - size.Width;
+                        alongY = Math.Max(wa.Top, Math.Min(Top + Height / 2 - size.Height / 2, wa.Bottom - size.Height));
+                    }
+                    else
+                    {
+                        alongX = Math.Max(wa.Left, Math.Min(Left + Width / 2 - size.Width / 2, wa.Right - size.Width));
+                        alongY = _dockEdge == DockEdge.Top ? wa.Top : wa.Bottom - size.Height;
+                    }
+                    _currentLayout = dockLayout;
+                    _dockedBounds = new Rectangle(alongX, alongY, size.Width, size.Height);
+                    UpdateMenuChecks();
+                    _pendingHideAfterSlide = true;
+                    SlideBoundsTo(_dockedBounds);
+                    _settingsStore.Save(_settings);
+                    PositionChanged?.Invoke();
+                    return;
+                }
+            }
+            else
+            {
+                _preDockLayout = null;
+            }
+
+            _settingsStore.Save(_settings);
+            PositionChanged?.Invoke();
+            if (_settings.EdgeAutoHide)
+                _hideCountdown.Start();
+        }
+
+        private void CancelDockTimers()
+        {
+            _slideTimer.Stop();
+            _hideCountdown.Stop();
+            _revealCountdown.Stop();
+            _slideResizes = false;
+            _pendingHideAfterSlide = false;
+        }
+
+        private void SlideBoundsTo(Rectangle target)
+        {
+            _slideTarget = target;
+            _slideResizes = target.Width != Width || target.Height != Height;
+            var wa = Screen.FromPoint(new Point(target.X + target.Width / 2, target.Y + target.Height / 2)).WorkingArea;
+            _slideBoundsWa = target.Width <= wa.Width && target.Height <= wa.Height ? wa : Rectangle.Empty;
+            _slideTimer.Start();
+        }
+
+        private void CompleteSlide()
+        {
+            _slideTimer.Stop();
+            if (_slideResizes)
+            {
+                _slideResizes = false;
+                SetRoundedRegion();
+                HideMetricToolTip();
+                UpdateMetricHitRects();
+                ApplyMonitoringSettings();
+                Invalidate();
+            }
+            if (_pendingHideAfterSlide)
+            {
+                _pendingHideAfterSlide = false;
+                if (_settings.EdgeAutoHide && _dockEdge != DockEdge.None)
+                    _hideCountdown.Start();
+            }
+        }
+
+        private void EnterHiddenState(bool animate)
+        {
+            if (_dockEdge == DockEdge.None) return;
+            var wa = Screen.FromPoint(new Point(_dockedBounds.X + _dockedBounds.Width / 2, _dockedBounds.Y + _dockedBounds.Height / 2)).WorkingArea;
+            var hidden = GetHiddenPosition(_dockEdge, _dockedBounds, wa);
+            _isEdgeHidden = true;
+            HideMetricToolTip();
+            if (animate) SlideBoundsTo(new Rectangle(hidden, _dockedBounds.Size));
+            else { CancelDockTimers(); Location = hidden; }
+            // 主动重绘：透明模式下移动窗口不会重新提交位图，收起高亮条需随状态立即出现。
+            Invalidate();
+        }
+
+        private void ExitHiddenState(bool animate)
+        {
+            _isEdgeHidden = false;
+            HideMetricToolTip();
+            if (animate) SlideBoundsTo(_dockedBounds);
+            else { CancelDockTimers(); Location = _dockedBounds.Location; }
+            // 收起期间跳过了数据重绘，弹出时用最新快照刷一帧。
+            Invalidate();
+        }
+
+        public Point GetPersistPosition() => _dockEdge == DockEdge.None ? Location : _dockedBounds.Location;
+
+        public void SetEdgeAutoHide(bool enabled)
+        {
+            _settings.EdgeAutoHide = enabled;
+            if (!enabled && _isEdgeHidden) ExitHiddenState(true);
+            _settingsStore.Save(_settings);
+            UpdateMenuChecks();
+        }
+
+        private void ReapplyDockAfterResize()
+        {
+            if (_dockEdge == DockEdge.None) return;
+            var wa = Screen.FromPoint(new Point(_dockedBounds.X + _dockedBounds.Width / 2, _dockedBounds.Y + _dockedBounds.Height / 2)).WorkingArea;
+            int left = Left, top = Top;
+            int alongX = Math.Max(wa.Left, Math.Min(_dockedBounds.X, wa.Right - Width));
+            int alongY = Math.Max(wa.Top, Math.Min(_dockedBounds.Y, wa.Bottom - Height));
+            switch (_dockEdge)
+            {
+                case DockEdge.Left: left = wa.Left; top = alongY; break;
+                case DockEdge.Right: left = wa.Right - Width; top = alongY; break;
+                case DockEdge.Top: top = wa.Top; left = alongX; break;
+                case DockEdge.Bottom: top = wa.Bottom - Height; left = alongX; break;
+            }
+            _dockedBounds = new Rectangle(left, top, Width, Height);
+            Location = new Point(left, top);
+            if (_settings.EdgeAutoHide && _isEdgeHidden)
+                Location = GetHiddenPosition(_dockEdge, _dockedBounds, wa);
+            else _isEdgeHidden = false;
         }
 
         private void OnDataUpdated(MetricSnapshot snapshot)
@@ -557,7 +977,9 @@ namespace SysFloat.UI
             _vramHistory[_historyIndex] = ValidSample(latest.VramPercent);
             _historyIndex = (_historyIndex + 1) % _cpuHistory.Length;
             if (_historyCount < _cpuHistory.Length) _historyCount++;
-            if (Visible) Invalidate();
+            // 收起在边缘时窗口只剩留边条，跳过每秒整帧重绘；告警变色仍由
+            // SetAlertState 触发，弹出时 ExitHiddenState 会补一帧最新数据。
+            if (Visible && !_isEdgeHidden) Invalidate();
         }
 
         private static float ValidSample(float value) => float.IsNaN(value) || float.IsInfinity(value) || value < 0 ? -1 : Math.Max(0, Math.Min(100, value));
@@ -608,7 +1030,7 @@ namespace SysFloat.UI
                 : System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
             g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
 
-            float scale = Math.Max(1, DeviceDpi) / 96f;
+            float scale = (Math.Max(1, DeviceDpi) / 96f) * UserScale;
             g.ScaleTransform(scale, scale);
 
             var bounds = new Rectangle(0, 0, (int)Math.Ceiling(pixelWidth / scale), (int)Math.Ceiling(pixelHeight / scale));
@@ -629,6 +1051,32 @@ namespace SysFloat.UI
                         threshold, _settings.HighLoadAlertsEnabled, _activeAlertMetrics, _selectedProcessMetric, backgroundAlpha);
                     _closeButtonRect = ScaleRect(WidgetRenderer.GetCloseButtonRect(bounds, WidgetLayout.Expanded), scale);
                     break;
+                case WidgetLayout.Mini:
+                    WidgetRenderer.DrawMini(g, bounds, _snapshot, threshold, _settings.HighLoadAlertsEnabled, _activeAlertMetrics, backgroundAlpha);
+                    break;
+            }
+
+            DrawSliverEdge(g, bounds, scale);
+        }
+
+        private void DrawSliverEdge(Graphics g, Rectangle bounds, float scale)
+        {
+            if (_dockEdge == DockEdge.None) return;
+            // 停靠期间高亮常显，不再"收起才有"：收起时整条留边高亮（便于找到+看告警色），
+            // 弹出时在内侧边缘留一条细线指示"已停靠"；高负载告警时两态都转橙。
+            bool verticalStrip = _dockEdge == DockEdge.Left || _dockEdge == DockEdge.Right;
+            float w = _isEdgeHidden ? Math.Max(3f, EdgeSliverSize / scale) : Math.Max(1.5f, 3f / scale);
+            int alpha = _isEdgeHidden ? 215 : 120;
+            var strip = verticalStrip
+                ? new RectangleF(_dockEdge == DockEdge.Left ? bounds.Right - w : bounds.X, bounds.Y, w, bounds.Height)
+                : new RectangleF(bounds.X, _dockEdge == DockEdge.Top ? bounds.Bottom - w : bounds.Y, bounds.Width, w);
+            Color color = _activeAlertMetrics != 0 ? Color.FromArgb(255, 174, 91) : Color.FromArgb(67, 142, 255);
+            using (var path = WidgetRenderer.CreateRoundedRectPath(bounds, GetCornerRadius(_currentLayout)))
+            using (var brush = new SolidBrush(Color.FromArgb(alpha, color)))
+            {
+                g.SetClip(path);
+                g.FillRectangle(brush, strip);
+                g.ResetClip();
             }
         }
 
@@ -694,6 +1142,7 @@ namespace SysFloat.UI
             if (e.Button == MouseButtons.Right) HideMetricToolTip();
             if (e.Button == MouseButtons.Left)
             {
+                CancelDockTimers();
                 if (_currentLayout == WidgetLayout.Expanded && _closeButtonRect.Contains(e.Location))
                 {
                     HideWidget();
@@ -721,8 +1170,9 @@ namespace SysFloat.UI
             {
                 int dx = Cursor.Position.X - _dragStart.X;
                 int dy = Cursor.Position.Y - _dragStart.Y;
-                Left = _formStart.X + dx;
-                Top = _formStart.Y + dy;
+                var snapped = SnapPosition(_formStart.X + dx, _formStart.Y + dy, Width, Height);
+                Left = snapped.X;
+                Top = snapped.Y;
             }
             else if (!_isLeftPressActive && _currentLayout == WidgetLayout.Expanded)
             {
@@ -749,10 +1199,7 @@ namespace SysFloat.UI
                 Capture = false;
                 if (dragged)
                 {
-                    _settings.Left = Left;
-                    _settings.Top = Top;
-                    _settingsStore.Save(_settings);
-                    PositionChanged?.Invoke();
+                    CompleteDrag();
                 }
                 else
                 {
@@ -786,6 +1233,16 @@ namespace SysFloat.UI
             }
         }
 
+        protected override void OnMouseWheel(MouseEventArgs e)
+        {
+            if ((ModifierKeys & Keys.Control) == Keys.Control)
+            {
+                ApplyScale(_settings.ScalePercent + (e.Delta > 0 ? 5 : -5));
+                return;
+            }
+            base.OnMouseWheel(e);
+        }
+
         private int GetProcessMetricAt(Point physicalLocation)
         {
             if (_currentLayout != WidgetLayout.Expanded) return -1;
@@ -796,18 +1253,19 @@ namespace SysFloat.UI
 
         private void UpdateCursor(Point location)
         {
-            if (_currentLayout == WidgetLayout.Expanded &&
-                (_closeButtonRect.Contains(location) || GetProcessMetricAt(location) >= 0))
-                Cursor = Cursors.Hand;
-            else
-                Cursor = _settings.Locked ? Cursors.Default : Cursors.SizeAll;
+            // 鼠标移动高频触发；仅在手型/移动型切换时真正设置 Cursor。
+            bool hand = _currentLayout == WidgetLayout.Expanded &&
+                (_closeButtonRect.Contains(location) || GetProcessMetricAt(location) >= 0);
+            if (hand == _handCursorActive) return;
+            _handCursorActive = hand;
+            Cursor = hand ? Cursors.Hand : (_settings.Locked ? Cursors.Default : Cursors.SizeAll);
         }
 
         public WidgetLayout GetCurrentLayout() => _currentLayout;
 
         private void UpdateMetricHitRects()
         {
-            float scale = Math.Max(1, DeviceDpi) / 96f;
+            float scale = (Math.Max(1, DeviceDpi) / 96f) * UserScale;
             var logical = new Rectangle(0, 0, (int)Math.Ceiling(Width / scale), (int)Math.Ceiling(Height / scale));
             var logicalRects = WidgetRenderer.GetMetricHitRects(logical, _currentLayout);
             _metricHitRects = new Rectangle[logicalRects.Length];
@@ -869,14 +1327,24 @@ namespace SysFloat.UI
             _activeMetric = -1;
         }
 
+        protected override void OnMouseEnter(EventArgs e)
+        {
+            base.OnMouseEnter(e);
+            _revealCountdown.Stop();
+            if (_dockEdge != DockEdge.None && _isEdgeHidden)
+                ExitHiddenState(true);
+        }
+
         protected override void OnMouseLeave(EventArgs e)
         {
             HideMetricToolTip();
             bool wasCloseHover = _isCloseHover;
             _isCloseHover = false;
-            if (!_isLeftPressActive) Cursor = Cursors.Default;
+            if (!_isLeftPressActive) { Cursor = Cursors.Default; _handCursorActive = false; }
             if (wasCloseHover) Invalidate();
             base.OnMouseLeave(e);
+            if (_dockEdge != DockEdge.None && !_isEdgeHidden && _settings.EdgeAutoHide && !_contextMenu.Visible)
+                _revealCountdown.Start();
         }
 
         protected override void OnHandleCreated(EventArgs e)
@@ -911,6 +1379,12 @@ namespace SysFloat.UI
                 _clockTimer?.Dispose();
                 _topMostTimer?.Stop();
                 _topMostTimer?.Dispose();
+                _slideTimer?.Stop();
+                _slideTimer?.Dispose();
+                _hideCountdown?.Stop();
+                _hideCountdown?.Dispose();
+                _revealCountdown?.Stop();
+                _revealCountdown?.Dispose();
                 _metricToolTip?.Dispose();
                 _contextMenu?.Dispose();
                 DisposeLayeredSurface();
@@ -926,6 +1400,10 @@ namespace SysFloat.UI
 
         public void MoveToVisibleArea()
         {
+            CancelDockTimers();
+            _dockEdge = DockEdge.None;
+            _settings.DockedEdge = DockEdge.None;
+            _isEdgeHidden = false;
             var screen = Screen.PrimaryScreen.WorkingArea;
             if (Left < screen.Left || Top < screen.Top || Left > screen.Right - 50 || Top > screen.Bottom - 50)
             {
@@ -958,10 +1436,11 @@ namespace SysFloat.UI
     {
         public static float GetDpiScale(Control control)
         {
+            // DeviceDpi 是 WinForms 自己跟踪的窗口 DPI（混合 DPI 下随窗口所在屏变化），
+            // 与 DrawWidget 的缩放口径一致，且不像 CreateGraphics 那样强制建句柄/拿 HDC。
             try
             {
-                using (var g = control.CreateGraphics())
-                    return g.DpiX / 96f;
+                return Math.Max(1, control.DeviceDpi) / 96f;
             }
             catch { return 1.0f; }
         }

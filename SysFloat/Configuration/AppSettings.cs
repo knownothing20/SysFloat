@@ -6,7 +6,8 @@ namespace SysFloat.Configuration
     {
         Horizontal,
         Vertical,
-        Expanded
+        Expanded,
+        Mini
     }
 
     public enum WidgetOpacity
@@ -14,6 +15,15 @@ namespace SysFloat.Configuration
         Opaque = 100,
         Percent75 = 75,
         Percent50 = 50
+    }
+
+    public enum DockEdge
+    {
+        None = 0,
+        Left = 1,
+        Right = 2,
+        Top = 3,
+        Bottom = 4
     }
 
     public class AppSettings
@@ -24,6 +34,10 @@ namespace SysFloat.Configuration
         public bool Visible { get; set; } = true;
         public bool AlwaysOnTop { get; set; } = true;
         public bool Locked { get; set; }
+        public bool SnapToEdges { get; set; } = true;
+        public bool EdgeAutoHide { get; set; } = true;
+        public DockEdge DockedEdge { get; set; } = DockEdge.None;
+        public int ScalePercent { get; set; } = 100;
         public WidgetOpacity Opacity { get; set; } = WidgetOpacity.Opaque;
 
         public bool PowerSavingMode { get; set; } = false;
@@ -41,6 +55,9 @@ namespace SysFloat.Configuration
             if (!Enum.IsDefined(typeof(WidgetOpacity), Opacity))
                 Opacity = WidgetOpacity.Opaque;
 
+            if (!Enum.IsDefined(typeof(DockEdge), DockedEdge))
+                DockedEdge = DockEdge.None;
+
             if (SamplingIntervalSeconds <= 1)
                 SamplingIntervalSeconds = 1;
             else if (SamplingIntervalSeconds <= 3)
@@ -50,6 +67,9 @@ namespace SysFloat.Configuration
 
             HighLoadThresholdPercent = Math.Max(1, Math.Min(100, HighLoadThresholdPercent));
             HighLoadDurationSeconds = Math.Max(1, Math.Min(300, HighLoadDurationSeconds));
+
+            ScalePercent = Math.Max(50, Math.Min(200, ScalePercent));
+            ScalePercent = (int)Math.Round(ScalePercent / 5.0) * 5;
         }
     }
 }

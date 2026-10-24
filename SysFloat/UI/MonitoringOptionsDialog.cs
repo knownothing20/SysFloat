@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -75,6 +75,8 @@ namespace SysFloat.UI
             _close.FlatAppearance.MouseOverBackColor = Color.FromArgb(57, 65, 80);
 
             Controls.AddRange(new Control[] { _powerSaving, _interval, _alerts, _threshold, _duration, _popup, _save, _cancel, _close });
+            // 默认展示态不显示键盘焦点虚线框，键盘 Tab 导航仍可用。
+            Shown += (s, e) => { ActiveControl = null; };
             foreach (var control in new Control[] { _powerSaving, _interval, _alerts, _threshold, _duration, _popup })
                 control.BackColor = CardColor;
             AcceptButton = _save;
@@ -300,12 +302,15 @@ namespace SysFloat.UI
                 {
                     var rect = new Rectangle(i * segmentWidth + 2, 2, segmentWidth - 3, Height - 4);
                     bool selected = _options[i] == SelectedSeconds;
-                    if (selected && Enabled)
+                    if (selected)
                     {
+                        // 禁用态也用淡填充显示已选档位，避免三项看起来完全一样。
                         using (var path = CreateRoundPath(rect, Math.Max(5, Height / 5)))
-                        using (var brush = new SolidBrush(Accent)) e.Graphics.FillPath(brush, path);
+                        using (var brush = new SolidBrush(Enabled ? Accent : Color.FromArgb(60, Accent))) e.Graphics.FillPath(brush, path);
                     }
-                    using (var brush = new SolidBrush(!Enabled ? Color.FromArgb(105, 113, 128) : selected ? Color.White : MutedText))
+                    using (var brush = new SolidBrush(!Enabled
+                        ? (selected ? Color.FromArgb(170, 178, 192) : Color.FromArgb(105, 113, 128))
+                        : selected ? Color.White : MutedText))
                     {
                         string text = _options[i] + " 秒";
                         var size = e.Graphics.MeasureString(text, Font);

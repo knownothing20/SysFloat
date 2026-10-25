@@ -25,6 +25,10 @@ Write-Output "== backup current root exe =="
 if (Test-Path $rootExe) {
     New-Item -ItemType Directory -Force (Join-Path $repo 'backup') | Out-Null
     Copy-Item $rootExe (Join-Path $repo ("backup\SysFloat-before-deploy-$stamp.exe")) -Force
+    # 只保留最近 2 个部署备份，更旧的删除；版本回溯走 GitHub Releases/提交历史。
+    Get-ChildItem (Join-Path $repo 'backup') -Filter 'SysFloat-before-deploy-*.exe' |
+        Sort-Object Name -Descending | Select-Object -Skip 2 |
+        ForEach-Object { Remove-Item $_.FullName -Force }
 }
 
 Write-Output "== stop running instance and replace =="

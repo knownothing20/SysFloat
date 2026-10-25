@@ -21,6 +21,12 @@ tools\         deploy.ps1 / package-folder.ps1 / privacy-check.ps1 / publish.bat
 - 隐私红线：`local\`、`backup\`、`release\` 已被 .gitignore 排除；**任何推送前必须运行 `tools\privacy-check.ps1` 且 PASS**。
 - 根目录 exe 的"永远最新"由 `tools\deploy.ps1` 保证：发布 → 时间戳备份 → 停止实例 → 替换 → 重启 → 自检，并在 `local\deploy-log.txt` 记录版本/git/哈希。改完代码一律跑它部署。
 
+## 备份与空间纪律（用户明确要求）
+
+- **`backup\` 只保留最近 2 个部署备份**：`deploy.ps1` 生成新备份后自动删除更旧的，使目录恒 ≤2 项。旧版本回溯一律走 GitHub（Release 附件 + 提交历史），不在本机囤积。
+- 构建中间产物（`src\*\bin`、`src\*\obj`、`release\packaging`、`release\win-x64-self-contained`）**用完即清**：它们随时可由一条命令重建，长期保留只浪费空间。`release\` 长期只留当前版本的 ZIP + sha256。
+- 每隔一段时间用 `du -sh` 检查总量，异常膨胀（>500MB）时按上述规则清理。
+
 ## 构建与验证
 
 - 源码 .NET 5（SDK 5.0.408），`net5.0-windows` WinForms；验证程序共 **166 项断言**：

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 namespace SysFloat.Monitoring
@@ -19,6 +20,7 @@ namespace SysFloat.Monitoring
         public ulong VramUsedBytes { get; set; }
         public ulong VramTotalBytes { get; set; }
         public bool VramAvailable { get; set; }
+        public IReadOnlyList<GpuMemoryInfo> Gpus { get; set; } = Array.Empty<GpuMemoryInfo>();
         public ProcessMetric RankingMetric { get; set; } = ProcessMetric.Memory;
         public bool CpuProcessesAvailable { get; set; }
         public bool MemoryProcessesAvailable { get; set; } = true;
@@ -28,6 +30,18 @@ namespace SysFloat.Monitoring
         public List<ProcessInfo> TopCpuProcesses { get; set; } = new List<ProcessInfo>();
         public List<ProcessInfo> TopMemoryProcesses { get; set; } = new List<ProcessInfo>();
         public List<ProcessInfo> TopVramProcesses { get; set; } = new List<ProcessInfo>();
+    }
+
+    public sealed class GpuMemoryInfo
+    {
+        public string Id { get; set; }
+        public string Name { get; set; }
+        public float Percent { get; set; } = -1;
+        public ulong UsedBytes { get; set; }
+        public ulong TotalBytes { get; set; }
+        public bool Available { get; set; }
+        public ulong SharedUsedBytes { get; set; }
+        public bool SharedAvailable { get; set; }
     }
 
     public class ProcessInfo

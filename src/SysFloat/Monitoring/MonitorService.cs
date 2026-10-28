@@ -334,15 +334,18 @@ namespace SysFloat.Monitoring
                 snapshot.MemoryUsedBytes = mem.used;
                 snapshot.MemoryTotalBytes = mem.total;
 
-                (float percent, ulong used, ulong total, bool available) vram;
                 lock (_gpuLock)
                 {
-                    vram = _disposed ? (-1, 0, 0, false) : _gpuMonitor.GetVramInfo();
+                    snapshot.Gpus = _disposed ? Array.Empty<GpuMemoryInfo>() : _gpuMonitor.GetGpuMemoryInfo();
                 }
-                snapshot.VramPercent = vram.percent;
-                snapshot.VramUsedBytes = vram.used;
-                snapshot.VramTotalBytes = vram.total;
-                snapshot.VramAvailable = vram.available;
+                if (snapshot.Gpus.Count > 0)
+                {
+                    var primary = snapshot.Gpus[0];
+                    snapshot.VramPercent = primary.Percent;
+                    snapshot.VramUsedBytes = primary.UsedBytes;
+                    snapshot.VramTotalBytes = primary.TotalBytes;
+                    snapshot.VramAvailable = primary.Available;
+                }
 
                 lock (_lifecycleLock)
                 {

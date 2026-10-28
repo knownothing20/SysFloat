@@ -33,8 +33,11 @@ namespace SysFloat.UI
         private static readonly Font ProcessValueFont = CreateLogicalFont(8.2f, FontStyle.Bold);
         private static readonly Font MiniLabelFont = CreateLogicalFont(7.5f, FontStyle.Bold);
         private static readonly Font MiniValueFont = CreateLogicalFont(10.5f, FontStyle.Bold);
+        private static readonly Font SmallDualValueFont = CreateLogicalFont(8.5f, FontStyle.Bold);
+        private static readonly Font TinyDualValueFont = CreateLogicalFont(7f, FontStyle.Bold);
+        private static readonly Font[] GpuValueFonts = { ValueFont, MiniValueFont, SmallDualValueFont, TinyDualValueFont };
 
-        public static void DrawHorizontal(Graphics g, Rectangle bounds, MetricSnapshot snapshot, int alertThreshold = 90, bool alertsEnabled = true, int activeAlertMetrics = 7, int backgroundAlpha = 255)
+        public static void DrawHorizontal(Graphics g, Rectangle bounds, MetricSnapshot snapshot, int alertThreshold = 90, bool alertsEnabled = true, int activeAlertMetrics = 7, int backgroundAlpha = 255, IReadOnlyCollection<string> activeGpuIds = null)
         {
             DrawPanel(g, bounds, 14, backgroundAlpha);
             Color muted = GetMutedColor(backgroundAlpha);
@@ -47,7 +50,9 @@ namespace SysFloat.UI
             for (int i = 0; i < 3; i++)
             {
                 var area = new Rectangle(bounds.X + i * sectionWidth, bounds.Y, sectionWidth, bounds.Height);
-                DrawCompactMetric(g, area, labels[i], values[i], colors[i], alertThreshold, alertsEnabled && (activeAlertMetrics & (1 << i)) != 0, muted);
+                if (i == 2 && GpuDisplay.IsMultiple(snapshot))
+                    DrawMultiGpuMetric(g, area, snapshot, false, false, alertThreshold, alertsEnabled, activeGpuIds, muted);
+                else DrawCompactMetric(g, area, labels[i], values[i], colors[i], alertThreshold, alertsEnabled && (activeAlertMetrics & (1 << i)) != 0, muted);
                 if (i > 0) DrawDivider(g, area.X, bounds.Y + 16, bounds.Y + bounds.Height - 16);
             }
             int clockX = bounds.Right - clockWidth;
@@ -55,7 +60,7 @@ namespace SysFloat.UI
             DrawClock(g, new Rectangle(clockX + 7, bounds.Y + 3, clockWidth - 12, bounds.Height - 6), false, muted);
         }
 
-        public static void DrawVertical(Graphics g, Rectangle bounds, MetricSnapshot snapshot, int alertThreshold = 90, bool alertsEnabled = true, int activeAlertMetrics = 7, int backgroundAlpha = 255)
+        public static void DrawVertical(Graphics g, Rectangle bounds, MetricSnapshot snapshot, int alertThreshold = 90, bool alertsEnabled = true, int activeAlertMetrics = 7, int backgroundAlpha = 255, IReadOnlyCollection<string> activeGpuIds = null)
         {
             DrawPanel(g, bounds, 14, backgroundAlpha);
             Color muted = GetMutedColor(backgroundAlpha);
@@ -68,7 +73,9 @@ namespace SysFloat.UI
             for (int i = 0; i < 3; i++)
             {
                 var row = new Rectangle(bounds.X + 5, bounds.Y + i * rowHeight + 2, bounds.Width - 10, rowHeight - 4);
-                DrawVerticalMetric(g, row, labels[i], values[i], colors[i], alertThreshold, alertsEnabled && (activeAlertMetrics & (1 << i)) != 0, muted);
+                if (i == 2 && GpuDisplay.IsMultiple(snapshot))
+                    DrawMultiGpuMetric(g, row, snapshot, true, false, alertThreshold, alertsEnabled, activeGpuIds, muted);
+                else DrawVerticalMetric(g, row, labels[i], values[i], colors[i], alertThreshold, alertsEnabled && (activeAlertMetrics & (1 << i)) != 0, muted);
             }
             int clockY = bounds.Bottom - clockHeight;
             DrawHorizontalDivider(g, bounds.X + 14, clockY, bounds.Right - 14);
@@ -78,7 +85,7 @@ namespace SysFloat.UI
         public static void DrawExpanded(Graphics g, Rectangle bounds, MetricSnapshot snapshot,
             float[] cpuHistory, float[] ramHistory, float[] vramHistory, bool isCloseHover,
             int alertThreshold = 90, bool alertsEnabled = true, int activeAlertMetrics = 7,
-            ProcessMetric selectedMetric = ProcessMetric.Memory, int backgroundAlpha = 255)
+            ProcessMetric selectedMetric = ProcessMetric.Memory, int backgroundAlpha = 255, IReadOnlyCollection<string> activeGpuIds = null)
         {
             if (!Enum.IsDefined(typeof(ProcessMetric), selectedMetric)) selectedMetric = ProcessMetric.Memory;
             DrawPanel(g, bounds, 14, backgroundAlpha);
@@ -100,7 +107,7 @@ namespace SysFloat.UI
                 var rowBounds = new Rectangle(bounds.X + 7, y + 1, leftWidth - 18, rowHeight - 2);
                 if (i == (int)selectedMetric) DrawSelectedMetric(g, rowBounds, colors[i]);
                 DrawExpandedMetric(g, new Rectangle(bounds.X + 13, y + 1, leftWidth - 22, rowHeight - 2),
-                    labels[i], values[i], colors[i], histories[i], snapshot, i, alertThreshold, alertsEnabled && (activeAlertMetrics & (1 << i)) != 0, muted, dim);
+                    labels[i], values[i], colors[i], histories[i], snapshot, i, alertThreshold, alertsEnabled && (activeAlertMetrics & (1 << i)) != 0, muted, dim, activeGpuIds);
                 if (i < 2) DrawHorizontalDivider(g, bounds.X + 13, y + rowHeight, bounds.X + leftWidth - 10);
             }
 
@@ -111,7 +118,7 @@ namespace SysFloat.UI
             DrawSelectionBridge(g, rightX, activeY, MetricColor(selectedMetric));
         }
 
-        public static void DrawMini(Graphics g, Rectangle bounds, MetricSnapshot snapshot, int alertThreshold = 90, bool alertsEnabled = true, int activeAlertMetrics = 7, int backgroundAlpha = 255)
+        public static void DrawMini(Graphics g, Rectangle bounds, MetricSnapshot snapshot, int alertThreshold = 90, bool alertsEnabled = true, int activeAlertMetrics = 7, int backgroundAlpha = 255, IReadOnlyCollection<string> activeGpuIds = null)
         {
             DrawPanel(g, bounds, 12, backgroundAlpha);
             Color muted = GetMutedColor(backgroundAlpha);
@@ -124,6 +131,12 @@ namespace SysFloat.UI
                 int cellX = bounds.X + i * sectionWidth;
                 int cellWidth = i == 2 ? bounds.Right - cellX : sectionWidth;
                 var area = new Rectangle(cellX, bounds.Y, cellWidth, bounds.Height);
+                if (i == 2 && GpuDisplay.IsMultiple(snapshot))
+                {
+                    DrawMultiGpuMetric(g, area, snapshot, false, true, alertThreshold, alertsEnabled, activeGpuIds, muted);
+                    DrawDivider(g, area.X, bounds.Y + 8, bounds.Bottom - 8);
+                    continue;
+                }
                 var labelSize = g.MeasureString(labels[i], MiniLabelFont);
                 using (var brush = new SolidBrush(muted))
                     g.DrawString(labels[i], MiniLabelFont, brush, area.X + (area.Width - labelSize.Width) / 2f, area.Y + 3);
@@ -167,23 +180,23 @@ namespace SysFloat.UI
         public static void DrawLayout(Graphics g, Rectangle bounds, WidgetLayout layout, MetricSnapshot snapshot,
             float[] cpuHistory = null, float[] ramHistory = null, float[] vramHistory = null,
             bool isCloseHover = false, int alertThreshold = 90, bool alertsEnabled = true,
-            ProcessMetric selectedMetric = ProcessMetric.Memory, int backgroundAlpha = 255)
+            ProcessMetric selectedMetric = ProcessMetric.Memory, int backgroundAlpha = 255, IReadOnlyCollection<string> activeGpuIds = null)
         {
             snapshot = snapshot ?? new MetricSnapshot();
             switch (layout)
             {
                 case WidgetLayout.Vertical:
-                    DrawVertical(g, bounds, snapshot, alertThreshold, alertsEnabled, 7, backgroundAlpha);
+                    DrawVertical(g, bounds, snapshot, alertThreshold, alertsEnabled, 7, backgroundAlpha, activeGpuIds);
                     break;
                 case WidgetLayout.Expanded:
                     DrawExpanded(g, bounds, snapshot, cpuHistory ?? CreateEmptyHistory(), ramHistory ?? CreateEmptyHistory(),
-                        vramHistory ?? CreateEmptyHistory(), isCloseHover, alertThreshold, alertsEnabled, 7, selectedMetric, backgroundAlpha);
+                        vramHistory ?? CreateEmptyHistory(), isCloseHover, alertThreshold, alertsEnabled, 7, selectedMetric, backgroundAlpha, activeGpuIds);
                     break;
                 case WidgetLayout.Mini:
-                    DrawMini(g, bounds, snapshot, alertThreshold, alertsEnabled, 7, backgroundAlpha);
+                    DrawMini(g, bounds, snapshot, alertThreshold, alertsEnabled, 7, backgroundAlpha, activeGpuIds);
                     break;
                 default:
-                    DrawHorizontal(g, bounds, snapshot, alertThreshold, alertsEnabled, 7, backgroundAlpha);
+                    DrawHorizontal(g, bounds, snapshot, alertThreshold, alertsEnabled, 7, backgroundAlpha, activeGpuIds);
                     break;
             }
         }
@@ -229,6 +242,88 @@ namespace SysFloat.UI
         private static Font CreateLogicalFont(float pointSize, FontStyle style)
         {
             return new Font("Segoe UI", pointSize * 96f / 72f, style, GraphicsUnit.Pixel);
+        }
+
+        private static bool IsGpuAlerted(GpuMemoryInfo gpu, IReadOnlyCollection<string> activeGpuIds)
+        {
+            if (activeGpuIds != null)
+                foreach (string id in activeGpuIds)
+                    if (string.Equals(id, gpu.Id, StringComparison.Ordinal)) return true;
+            return false;
+        }
+
+        private static Color GpuColor(GpuMemoryInfo gpu, int threshold, bool alertsEnabled, IReadOnlyCollection<string> activeGpuIds) =>
+            ValueColor(gpu.Available ? gpu.Percent : -1, Vram, threshold, alertsEnabled && IsGpuAlerted(gpu, activeGpuIds));
+
+        private static Font SelectGpuValueFont(Graphics g, MetricSnapshot snapshot, Font maximum, float available, out float width)
+        {
+            using (var format = StringFormat.GenericTypographic)
+            {
+                Font selected = TinyDualValueFont;
+                width = 0;
+                foreach (Font font in GpuValueFonts)
+                {
+                    if (font.Size > maximum.Size) continue;
+                    selected = font;
+                    width = 0;
+                    for (int i = 0; i < snapshot.Gpus.Count; i++)
+                    {
+                        if (i > 0) width += g.MeasureString(" | ", font, PointF.Empty, format).Width;
+                        width += g.MeasureString(GpuDisplay.PercentText(snapshot.Gpus[i]), font, PointF.Empty, format).Width;
+                    }
+                    if (width <= available) break;
+                }
+                return selected;
+            }
+        }
+
+        internal static float MeasureGpuValues(Graphics g, MetricSnapshot snapshot, float availableWidth, bool mini)
+        {
+            SelectGpuValueFont(g, snapshot, mini ? MiniValueFont : ValueFont, availableWidth, out float width);
+            return width;
+        }
+
+        private static void DrawGpuValues(Graphics g, Rectangle area, MetricSnapshot snapshot, Font maximum,
+            int threshold, bool alertsEnabled, IReadOnlyCollection<string> activeGpuIds, Color muted, bool centered)
+        {
+            Font font = SelectGpuValueFont(g, snapshot, maximum, area.Width - 8, out float width);
+            float x = centered ? area.X + (area.Width - width) / 2f : area.X;
+            using (var format = StringFormat.GenericTypographic)
+            {
+                for (int i = 0; i < snapshot.Gpus.Count; i++)
+                {
+                    if (i > 0)
+                    {
+                        using (var brush = new SolidBrush(muted)) g.DrawString(" | ", font, brush, x, area.Y, format);
+                        x += g.MeasureString(" | ", font, PointF.Empty, format).Width;
+                    }
+                    GpuMemoryInfo gpu = snapshot.Gpus[i];
+                    string text = GpuDisplay.PercentText(gpu);
+                    using (var brush = new SolidBrush(GpuColor(gpu, threshold, alertsEnabled, activeGpuIds)))
+                        g.DrawString(text, font, brush, x, area.Y, format);
+                    x += g.MeasureString(text, font, PointF.Empty, format).Width;
+                }
+            }
+        }
+
+        private static void DrawMultiGpuMetric(Graphics g, Rectangle area, MetricSnapshot snapshot, bool vertical,
+            bool mini, int threshold, bool alertsEnabled, IReadOnlyCollection<string> activeGpuIds, Color muted)
+        {
+            Font labelFont = mini ? MiniLabelFont : LabelFont;
+            var labelSize = g.MeasureString("VRAM", labelFont);
+            using (var brush = new SolidBrush(muted)) g.DrawString("VRAM", labelFont, brush,
+                area.X + (area.Width - labelSize.Width) / 2f, area.Y + (vertical ? 8 : mini ? 3 : 5));
+            DrawGpuValues(g, new Rectangle(area.X, area.Y + (vertical ? 25 : mini ? 14 : 20), area.Width, 25),
+                snapshot, mini ? MiniValueFont : ValueFont, threshold, alertsEnabled, activeGpuIds, muted, true);
+            float barX = vertical ? area.X + 4 : area.X + area.Width * .15f;
+            float barWidth = vertical ? area.Width - 8 : area.Width * .7f;
+            float segment = (barWidth - (snapshot.Gpus.Count - 1) * 5) / snapshot.Gpus.Count;
+            for (int i = 0; i < snapshot.Gpus.Count; i++)
+            {
+                var gpu = snapshot.Gpus[i];
+                DrawUsageBar(g, barX + i * (segment + 5), area.Bottom - (vertical ? 10 : mini ? 6 : 7), segment,
+                    gpu.Available ? gpu.Percent : -1, GpuColor(gpu, threshold, alertsEnabled, activeGpuIds));
+            }
         }
 
         private static void DrawCompactMetric(Graphics g, Rectangle area, string label, float value, Color color, int threshold, bool alertsEnabled, Color muted)
@@ -308,9 +403,18 @@ namespace SysFloat.UI
         }
 
         private static void DrawExpandedMetric(Graphics g, Rectangle area, string label, float value, Color color,
-            float[] history, MetricSnapshot snapshot, int index, int threshold, bool alertsEnabled, Color muted, Color dim)
+            float[] history, MetricSnapshot snapshot, int index, int threshold, bool alertsEnabled, Color muted, Color dim, IReadOnlyCollection<string> activeGpuIds = null)
         {
             using (var brush = new SolidBrush(muted)) g.DrawString(label, LabelFont, brush, area.X, area.Y + 2);
+            if (index == 2 && GpuDisplay.IsMultiple(snapshot))
+            {
+                DrawGpuValues(g, new Rectangle(area.X, area.Y + 17, area.Width, 24), snapshot, ValueFont,
+                    threshold, alertsEnabled, activeGpuIds, muted, false);
+                string caption = Ellipsize(g, UIStrings.Get("detail.gpuHistory"), DetailFont, area.Width);
+                using (var brush = new SolidBrush(dim)) g.DrawString(caption, DetailFont, brush, area.X, area.Y + 41);
+                DrawSparkline(g, new Rectangle(area.X, area.Y + 58, area.Width, Math.Max(8, area.Height - 63)), history, color);
+                return;
+            }
             string valueText = HasSample(value) ? string.Format("{0:0}%", value) : "N/A";
             using (var brush = new SolidBrush(ValueColor(value, color, threshold, alertsEnabled))) g.DrawString(valueText, ValueFont, brush, area.X, area.Y + 17);
             string detail = GetDetailText(snapshot, index, history);
@@ -396,7 +500,7 @@ namespace SysFloat.UI
             else if (selectedMetric == ProcessMetric.Vram)
             {
                 title = UIStrings.Get("rank.vramTitle");
-                subtitle = UIStrings.Get("rank.vramSubtitle");
+                subtitle = UIStrings.Get(GpuDisplay.IsMultiple(snapshot) ? "rank.allGpus" : "rank.vramSubtitle");
                 processes = snapshot.TopVramProcesses;
                 emptyMessage = UIStrings.Get("rank.vramEmpty");
             }

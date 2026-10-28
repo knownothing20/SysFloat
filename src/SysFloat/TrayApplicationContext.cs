@@ -320,7 +320,8 @@ namespace SysFloat
             var desiredIcon = alert.IsHighLoad ? _alertIcon : allOk ? _normalIcon : _disabledIcon;
             if (!ReferenceEquals(_notifyIcon.Icon, desiredIcon)) _notifyIcon.Icon = desiredIcon;
             // 托盘文本只在内容变化时更新（通常是整百分比变化才变），避免每秒无效赋值。
-            string trayText = $"SysFloat\nCPU {FormatPercent(snapshot.CpuPercent)} · RAM {FormatPercent(snapshot.MemoryPercent)} · VRAM {FormatPercent(snapshot.VramAvailable ? snapshot.VramPercent : -1)}";
+            string trayText = $"SysFloat\nCPU {FormatPercent(snapshot.CpuPercent)} · RAM {FormatPercent(snapshot.MemoryPercent)} · VRAM {GpuDisplay.Summary(snapshot)}";
+            if (trayText.Length > 63) trayText = trayText.Substring(0, 62) + "…";
             if (!string.Equals(_notifyIcon.Text, trayText, StringComparison.Ordinal))
                 _notifyIcon.Text = trayText;
 

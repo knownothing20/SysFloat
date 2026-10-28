@@ -52,6 +52,7 @@ namespace SysFloat.UI
         private bool _handCursorActive;
         private volatile bool _disposed;
         private int _activeAlertMetrics;
+        private readonly HashSet<string> _activeGpuAlerts = new HashSet<string>(StringComparer.Ordinal);
         private LayeredWidgetSurface _layeredSurface;
         private int _layeredRenderQueued;
         private int _layeredRenderGeneration;
@@ -538,8 +539,10 @@ namespace SysFloat.UI
 
         public void SetAlertState(AlertEvaluation state)
         {
-            if (_disposed || _activeAlertMetrics == state.ActiveMetricsMask) return;
+            if (_disposed || (_activeAlertMetrics == state.ActiveMetricsMask && _activeGpuAlerts.SetEquals(state.ActiveGpuIds))) return;
             _activeAlertMetrics = state.ActiveMetricsMask;
+            _activeGpuAlerts.Clear();
+            _activeGpuAlerts.UnionWith(state.ActiveGpuIds);
             if (Visible) Invalidate();
         }
 
@@ -1022,19 +1025,19 @@ namespace SysFloat.UI
             switch (_currentLayout)
             {
                 case WidgetLayout.Horizontal:
-                    WidgetRenderer.DrawHorizontal(g, bounds, _snapshot, threshold, _settings.HighLoadAlertsEnabled, _activeAlertMetrics, backgroundAlpha);
+                    WidgetRenderer.DrawHorizontal(g, bounds, _snapshot, threshold, _settings.HighLoadAlertsEnabled, _activeAlertMetrics, backgroundAlpha, _activeGpuAlerts);
                     break;
                 case WidgetLayout.Vertical:
-                    WidgetRenderer.DrawVertical(g, bounds, _snapshot, threshold, _settings.HighLoadAlertsEnabled, _activeAlertMetrics, backgroundAlpha);
+                    WidgetRenderer.DrawVertical(g, bounds, _snapshot, threshold, _settings.HighLoadAlertsEnabled, _activeAlertMetrics, backgroundAlpha, _activeGpuAlerts);
                     break;
                 case WidgetLayout.Expanded:
                     WidgetRenderer.DrawExpanded(g, bounds, _snapshot,
                         GetChronologicalHistory(_cpuHistory), GetChronologicalHistory(_ramHistory), GetChronologicalHistory(_vramHistory), _isCloseHover,
-                        threshold, _settings.HighLoadAlertsEnabled, _activeAlertMetrics, _selectedProcessMetric, backgroundAlpha);
+                        threshold, _settings.HighLoadAlertsEnabled, _activeAlertMetrics, _selectedProcessMetric, backgroundAlpha, _activeGpuAlerts);
                     _closeButtonRect = ScaleRect(WidgetRenderer.GetCloseButtonRect(bounds, WidgetLayout.Expanded), scale);
                     break;
                 case WidgetLayout.Mini:
-                    WidgetRenderer.DrawMini(g, bounds, _snapshot, threshold, _settings.HighLoadAlertsEnabled, _activeAlertMetrics, backgroundAlpha);
+                    WidgetRenderer.DrawMini(g, bounds, _snapshot, threshold, _settings.HighLoadAlertsEnabled, _activeAlertMetrics, backgroundAlpha, _activeGpuAlerts);
                     break;
             }
 
@@ -1297,6 +1300,7 @@ namespace SysFloat.UI
                 return _snapshot.MemoryTotalBytes > 0
                     ? UIStrings.Format("tip.ramSummary", FormatPercent(_snapshot.MemoryPercent), FormatBytes(_snapshot.MemoryUsedBytes), FormatBytes(_snapshot.MemoryTotalBytes))
                     : UIStrings.Get("tip.ramUnavailable");
+            if (_snapshot.Gpus?.Count > 0) return GpuDisplay.ToolTip(_snapshot);
             if (!_snapshot.VramAvailable) return UIStrings.Get("tip.vramUnavailable");
             if (_snapshot.VramTotalBytes == 0) return UIStrings.Format("tip.vramTotalUnknown", FormatBytes(_snapshot.VramUsedBytes));
             return UIStrings.Format("tip.vramSummary", FormatPercent(_snapshot.VramPercent), FormatBytes(_snapshot.VramUsedBytes), FormatBytes(_snapshot.VramTotalBytes));

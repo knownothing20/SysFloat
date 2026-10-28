@@ -30,6 +30,7 @@ internal static class Program
             VerifyAlert();
             VerifySettings();
             VerifyGpuUnits();
+            DualGpuChecks.Run(Check, Output);
             VerifyProcessCpuTracker();
             VerifyProcessVramCounter();
             RenderLayouts();
@@ -931,6 +932,15 @@ internal static class Program
                     (int)Field(widget, "_activeAlertMetrics") != 0,
                     "sustained real high load reaches tray and widget alert color");
                 var actual = (MetricSnapshot)Field(widget, "_snapshot");
+                Check(actual.Gpus.Count >= 2 && actual.Gpus[0].Name.Contains("NVIDIA") &&
+                    actual.VramPercent == actual.Gpus[0].Percent && tray.Text.Contains(" | "),
+                    "live dual GPU snapshot reaches widget/tray while legacy history stays on the fixed left GPU");
+                string gpuTip = (string)typeof(WidgetForm).GetMethod("BuildMetricToolTip", Hidden).Invoke(widget, new object[] { 2 });
+                Check(gpuTip.Contains("4070") && gpuTip.Contains("780M"), "actual widget hover describes both real GPUs");
+                widget.SetAlertState(new AlertEvaluation(true, true, "", 4, new[] { "nvidia" }));
+                widget.SetAlertState(new AlertEvaluation(true, true, "", 4, new[] { "amd" }));
+                Check(((HashSet<string>)Field(widget, "_activeGpuAlerts")).SetEquals(new[] { "amd" }),
+                    "widget refreshes individual GPU colors when aggregate VRAM alert mask remains unchanged");
                 Console.WriteLine($"Live metrics CPU={actual.CpuPercent:0.0}% RAM={actual.MemoryPercent:0.0}% VRAM={actual.VramPercent:0.0}% used={actual.VramUsedBytes} total={actual.VramTotalBytes}");
             }
             finally

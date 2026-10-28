@@ -69,6 +69,12 @@ namespace SysFloat.Configuration
             { "tip.ramSummary", "RAM：{0}\n已用 {1} / 共 {2}" },
             { "tip.vramUnavailable", "VRAM：不可用" },
             { "tip.vramSummary", "VRAM：{0}\n已用 {1} / 共 {2}" },
+            { "tip.gpus", "显存（从左到右，专用/预留显存）" },
+            { "tip.gpuRow", "{0}. {1}\n{2} · 已用 {3} / 共 {4}" },
+            { "tip.gpuShared", "共享内存：{0}（另计，不加入显存百分比）" },
+            { "detail.gpuHistory", "曲线：左侧显卡 · 悬停查看双卡" },
+            { "rank.allGpus", "应用合计 · 所有显卡专用显存" },
+            { "alert.gpu", "{0} 显存 {1:0}%" },
             { "tip.vramTotalUnknown", "VRAM：已用 {0}\n总容量暂不可用" },
 
             // 展开版详情与进程排行
@@ -166,6 +172,12 @@ namespace SysFloat.Configuration
             { "tip.ramSummary", "RAM: {0}\nUsed {1} / Total {2}" },
             { "tip.vramUnavailable", "VRAM: unavailable" },
             { "tip.vramSummary", "VRAM: {0}\nUsed {1} / Total {2}" },
+            { "tip.gpus", "VRAM (left to right, dedicated/reserved memory)" },
+            { "tip.gpuRow", "{0}. {1}\n{2} · Used {3} / Total {4}" },
+            { "tip.gpuShared", "Shared RAM: {0} (separate from VRAM percentage)" },
+            { "detail.gpuHistory", "Chart: left GPU · hover for both cards" },
+            { "rank.allGpus", "App totals · all GPUs' dedicated VRAM" },
+            { "alert.gpu", "{0} VRAM {1:0}%" },
             { "tip.vramTotalUnknown", "VRAM: used {0}\ntotal unavailable" },
 
             { "detail.unavailable", "N/A" },

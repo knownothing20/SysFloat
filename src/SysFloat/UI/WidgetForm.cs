@@ -414,7 +414,7 @@ namespace SysFloat.UI
             if (!IsHandleCreated) return;
             var bounds = new Rectangle(0, 0, Width, Height);
             int radius = (int)Math.Round(GetCornerRadius(_currentLayout) * (Math.Max(1, DeviceDpi) / 96f) * UserScale);
-            using (var gp = WidgetRenderer.CreateRoundedRectPath(bounds, radius))
+            using (var gp = WidgetRenderer.CreateRoundedRectPath(bounds, radius, GetVisualDockEdge()))
             {
                 var oldRegion = Region;
                 Region = new Region(gp);
@@ -734,6 +734,14 @@ namespace SysFloat.UI
             return DockEdge.None;
         }
 
+        private DockEdge GetVisualDockEdge()
+        {
+            // 自动滑入滑出仍属于停靠，手动拖离时才依据当前位置恢复四角。
+            if (!_isDragging) return _dockEdge;
+            var workingArea = Screen.FromRectangle(Bounds).WorkingArea;
+            return DetectDockEdge(Bounds, workingArea);
+        }
+
         private static Point GetHiddenPosition(DockEdge edge, Rectangle bounds, Rectangle workingArea)
         {
             int alongX = Math.Max(workingArea.Left, Math.Min(bounds.X, workingArea.Right - bounds.Width));
@@ -761,6 +769,8 @@ namespace SysFloat.UI
             var wa = Screen.FromPoint(new Point(Left + Width / 2, Top + Height / 2)).WorkingArea;
             _dockEdge = DetectDockEdge(Bounds, wa);
             _isEdgeHidden = false;
+            SetRoundedRegion();
+            Invalidate();
 
             if (_dockEdge == DockEdge.None)
             {
@@ -886,7 +896,7 @@ namespace SysFloat.UI
             HideMetricToolTip();
             if (animate) SlideBoundsTo(_dockedBounds);
             else { CancelDockTimers(); Location = _dockedBounds.Location; }
-            // 收起期间跳过了数据重绘，弹出时用最新快照刷一帧。
+            // 弹出时立即补齐完整面板内容。
             Invalidate();
         }
 
@@ -961,9 +971,8 @@ namespace SysFloat.UI
             _vramHistory[_historyIndex] = ValidSample(latest.VramPercent);
             _historyIndex = (_historyIndex + 1) % _cpuHistory.Length;
             if (_historyCount < _cpuHistory.Length) _historyCount++;
-            // 收起在边缘时窗口只剩留边条，跳过每秒整帧重绘；告警变色仍由
-            // SetAlertState 触发，弹出时 ExitHiddenState 会补一帧最新数据。
-            if (Visible && !_isEdgeHidden) Invalidate();
+            // 窄边也显示实时占用，沿用采样回调刷新，收起时仅绘制窄边。
+            if (Visible) Invalidate();
         }
 
         private static float ValidSample(float value) => float.IsNaN(value) || float.IsInfinity(value) || value < 0 ? -1 : Math.Max(0, Math.Min(100, value));
@@ -1021,47 +1030,56 @@ namespace SysFloat.UI
             var bounds = new Rectangle(0, 0, (int)Math.Ceiling(pixelWidth / scale), (int)Math.Ceiling(pixelHeight / scale));
             int threshold = _settings.HighLoadAlertsEnabled ? _settings.HighLoadThresholdPercent : int.MaxValue;
             int backgroundAlpha = GetBackgroundAlpha();
+            DockEdge visualEdge = GetVisualDockEdge();
+
+            if (_isEdgeHidden)
+            {
+                DrawSliverEdge(g, bounds, scale);
+                return;
+            }
 
             switch (_currentLayout)
             {
                 case WidgetLayout.Horizontal:
-                    WidgetRenderer.DrawHorizontal(g, bounds, _snapshot, threshold, _settings.HighLoadAlertsEnabled, _activeAlertMetrics, backgroundAlpha, _activeGpuAlerts);
+                    WidgetRenderer.DrawHorizontal(g, bounds, _snapshot, threshold, _settings.HighLoadAlertsEnabled, _activeAlertMetrics, backgroundAlpha, _activeGpuAlerts, visualEdge);
                     break;
                 case WidgetLayout.Vertical:
-                    WidgetRenderer.DrawVertical(g, bounds, _snapshot, threshold, _settings.HighLoadAlertsEnabled, _activeAlertMetrics, backgroundAlpha, _activeGpuAlerts);
+                    WidgetRenderer.DrawVertical(g, bounds, _snapshot, threshold, _settings.HighLoadAlertsEnabled, _activeAlertMetrics, backgroundAlpha, _activeGpuAlerts, visualEdge);
                     break;
                 case WidgetLayout.Expanded:
                     WidgetRenderer.DrawExpanded(g, bounds, _snapshot,
                         GetChronologicalHistory(_cpuHistory), GetChronologicalHistory(_ramHistory), GetChronologicalHistory(_vramHistory), _isCloseHover,
-                        threshold, _settings.HighLoadAlertsEnabled, _activeAlertMetrics, _selectedProcessMetric, backgroundAlpha, _activeGpuAlerts);
+                        threshold, _settings.HighLoadAlertsEnabled, _activeAlertMetrics, _selectedProcessMetric, backgroundAlpha, _activeGpuAlerts, visualEdge);
                     _closeButtonRect = ScaleRect(WidgetRenderer.GetCloseButtonRect(bounds, WidgetLayout.Expanded), scale);
                     break;
                 case WidgetLayout.Mini:
-                    WidgetRenderer.DrawMini(g, bounds, _snapshot, threshold, _settings.HighLoadAlertsEnabled, _activeAlertMetrics, backgroundAlpha, _activeGpuAlerts);
+                    WidgetRenderer.DrawMini(g, bounds, _snapshot, threshold, _settings.HighLoadAlertsEnabled, _activeAlertMetrics, backgroundAlpha, _activeGpuAlerts, visualEdge);
                     break;
             }
 
-            DrawSliverEdge(g, bounds, scale);
         }
 
         private void DrawSliverEdge(Graphics g, Rectangle bounds, float scale)
         {
-            if (_dockEdge == DockEdge.None) return;
-            // 停靠期间高亮常显，不再"收起才有"：收起时整条留边高亮（便于找到+看告警色），
-            // 弹出时在内侧边缘留一条细线指示"已停靠"；高负载告警时两态都转橙。
-            bool verticalStrip = _dockEdge == DockEdge.Left || _dockEdge == DockEdge.Right;
-            float w = _isEdgeHidden ? Math.Max(3f, EdgeSliverSize / scale) : Math.Max(1.5f, 3f / scale);
-            int alpha = _isEdgeHidden ? 215 : 120;
+            if (!_isEdgeHidden) return;
+            DockEdge visualEdge = GetVisualDockEdge();
+            if (visualEdge == DockEdge.None) return;
+            bool verticalStrip = visualEdge == DockEdge.Left || visualEdge == DockEdge.Right;
+            float w = Math.Max(3f, EdgeSliverSize / scale);
             var strip = verticalStrip
-                ? new RectangleF(_dockEdge == DockEdge.Left ? bounds.Right - w : bounds.X, bounds.Y, w, bounds.Height)
-                : new RectangleF(bounds.X, _dockEdge == DockEdge.Top ? bounds.Bottom - w : bounds.Y, bounds.Width, w);
-            Color color = _activeAlertMetrics != 0 ? Color.FromArgb(255, 174, 91) : Color.FromArgb(67, 142, 255);
-            using (var path = WidgetRenderer.CreateRoundedRectPath(bounds, GetCornerRadius(_currentLayout)))
-            using (var brush = new SolidBrush(Color.FromArgb(alpha, color)))
+                ? new RectangleF(visualEdge == DockEdge.Left ? bounds.Right - w : bounds.X, bounds.Y, w, bounds.Height)
+                : new RectangleF(bounds.X, visualEdge == DockEdge.Top ? bounds.Bottom - w : bounds.Y, bounds.Width, w);
+            using (var path = WidgetRenderer.CreateRoundedRectPath(bounds, GetCornerRadius(_currentLayout), visualEdge))
             {
-                g.SetClip(path);
-                g.FillRectangle(brush, strip);
-                g.ResetClip();
+                var state = g.Save();
+                g.SetClip(path, System.Drawing.Drawing2D.CombineMode.Intersect);
+                g.SetClip(strip, System.Drawing.Drawing2D.CombineMode.Intersect);
+                // 复用完整面板的背景坐标与透明度，覆盖绘制避免透明度叠加。
+                g.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
+                WidgetRenderer.DrawPanel(g, bounds, _currentLayout == WidgetLayout.Mini ? 12 : 14, GetBackgroundAlpha(), visualEdge);
+                g.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceOver;
+                WidgetRenderer.DrawUsageSliver(g, strip, verticalStrip, _snapshot, 215);
+                g.Restore(state);
             }
         }
 
@@ -1148,8 +1166,13 @@ namespace SysFloat.UI
 
         protected override void OnMouseMove(MouseEventArgs e)
         {
+            DockEdge previousVisualEdge = GetVisualDockEdge();
+            bool wasHidden = _isEdgeHidden;
             if (_isLeftPressActive && _dragCandidate && !_isDragging && ExceededDragThreshold(e.Location))
+            {
                 _isDragging = true;
+                _isEdgeHidden = false;
+            }
 
             if (_isDragging)
             {
@@ -1158,6 +1181,11 @@ namespace SysFloat.UI
                 var snapped = SnapPosition(_formStart.X + dx, _formStart.Y + dy, Width, Height);
                 Left = snapped.X;
                 Top = snapped.Y;
+                if (GetVisualDockEdge() != previousVisualEdge || wasHidden)
+                {
+                    SetRoundedRegion();
+                    Invalidate();
+                }
             }
             else if (!_isLeftPressActive && _currentLayout == WidgetLayout.Expanded)
             {
@@ -1344,6 +1372,7 @@ namespace SysFloat.UI
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
+            SetRoundedRegion();
             _uiSynchronizationContext = SynchronizationContext.Current as WindowsFormsSynchronizationContext
                 ?? new WindowsFormsSynchronizationContext();
             UpdateMetricHitRects();

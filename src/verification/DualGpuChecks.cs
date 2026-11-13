@@ -60,7 +60,7 @@ internal static class DualGpuChecks
         check(starts.Count == 0, "removed adapters release their alert timer entries");
         tracker.Reset(); snapshot = Snapshot(); tracker.Evaluate(snapshot, settings, 0);
         settings.HighLoadAlertsEnabled = false;
-        check(tracker.Evaluate(snapshot, settings, 30000).ActiveGpuIds.Count == 0, "disabled monitoring clears per-GPU colors and state");
+        check(tracker.Evaluate(snapshot, settings, 30000).ActiveGpuIds.Count == 0, "disabled monitoring clears per-GPU alert state");
         settings.HighLoadAlertsEnabled = true;
         check(!tracker.Evaluate(snapshot, settings, 31000).IsHighLoad, "re-enabled GPU alerts restart duration rather than inheriting stale high time");
         var calculate = typeof(GpuMemoryMonitor).GetMethod("CalculatePercent", BindingFlags.Static | BindingFlags.NonPublic);
@@ -106,13 +106,13 @@ internal static class DualGpuChecks
         }
         foreach (string activeId in new[] { "nvidia", "amd", "none" })
         {
-            snapshot = Snapshot(95, 95);
+            snapshot = Snapshot(55, 55);
             Size size = WidgetSizeHelper.GetSize(WidgetLayout.Horizontal, 1f);
             using (var bitmap = new Bitmap(size.Width, size.Height))
             using (var g = Graphics.FromImage(bitmap))
             {
                 g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
-                WidgetRenderer.DrawHorizontal(g, new Rectangle(Point.Empty, size), snapshot, activeGpuIds: new[] { activeId });
+                WidgetRenderer.DrawHorizontal(g, new Rectangle(Point.Empty, size), snapshot, alertThreshold: 50, activeGpuIds: new[] { activeId });
                 int leftOrange = 0, rightOrange = 0, leftGreen = 0, rightGreen = 0;
                 int start = (size.Width - 124) / 3 * 2, width = (size.Width - 124) / 3;
                 for (int y = 20; y < 45; y++) for (int x = start; x < start + width; x++)
@@ -124,9 +124,8 @@ internal static class DualGpuChecks
                     if (pixel.G > 180 && pixel.R < 180 && pixel.B > 120 && pixel.B < 200)
                     { if (left) leftGreen++; else rightGreen++; }
                 }
-                check(activeId == "nvidia" ? leftOrange > 0 && rightOrange == 0 && rightGreen > 0 :
-                    activeId == "amd" ? rightOrange > 0 && leftOrange == 0 && leftGreen > 0 : leftOrange + rightOrange == 0,
-                    $"pixel proof: per-card alert colors remain independent ({activeId})");
+                check(leftGreen > 0 && rightGreen > 0 && leftOrange + rightOrange == 0,
+                    $"pixel proof: GPU values keep fixed colors during alerts ({activeId})");
                 bitmap.Save(Path.Combine(output, $"DualGpu-alert-{activeId}.png"), ImageFormat.Png);
             }
         }

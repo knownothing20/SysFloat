@@ -31,6 +31,9 @@ internal static class Program
             VerifySettings();
             VerifyGpuUnits();
             DualGpuChecks.Run(Check, Output);
+            UsageColorChecks.Run(Check, Output);
+            SliverUsageChecks.Run(Check, Output);
+            DockAppearanceChecks.Run(Check, Output);
             VerifyProcessCpuTracker();
             VerifyProcessVramCounter();
             RenderLayouts();
@@ -450,14 +453,16 @@ internal static class Program
             SetFieldOn(widget, typeof(WidgetForm), "_dockEdge", DockEdge.Right);
             SetFieldOn(widget, typeof(WidgetForm), "_isEdgeHidden", false);
             SetFieldOn(widget, typeof(WidgetForm), "_activeAlertMetrics", 0);
+            SetFieldOn(widget, typeof(WidgetForm), "_snapshot", new MetricSnapshot {
+                CpuPercent = 55, MemoryPercent = 65, VramAvailable = true, VramPercent = 95 });
             using (var bmp = new Bitmap(200, 60))
             using (var g = Graphics.FromImage(bmp))
             {
                 g.Clear(Color.Black);
                 drawSliver.Invoke(widget, new object[] { g, bounds, 1f });
-                var thin = bmp.GetPixel(1, 30);
-                Check(thin.B > 100 && thin.B > thin.R + 60 && thin.G < thin.B,
-                    $"弹出停靠态在内侧边缘绘制细蓝线 (R={thin.R} G={thin.G} B={thin.B})");
+                var thin = bmp.GetPixel(2, 10);
+                Check(thin.ToArgb() == Color.Black.ToArgb(),
+                    "展开时由完整面板显示数据，窄条绘制保持空白");
 
                 SetFieldOn(widget, typeof(WidgetForm), "_dockEdge", DockEdge.None);
                 g.Clear(Color.Black);
@@ -470,21 +475,66 @@ internal static class Program
                 SetFieldOn(widget, typeof(WidgetForm), "_isEdgeHidden", true);
                 g.Clear(Color.Black);
                 drawSliver.Invoke(widget, new object[] { g, bounds, 1f });
-                var strong = bmp.GetPixel(5, 30);
-                Check(strong.B > 180 && strong.R < 90 && strong.G < strong.B,
-                    $"收起态整条留边高亮蓝 (R={strong.R} G={strong.G} B={strong.B})");
-                var mid = bmp.GetPixel(10, 30);
-                Check(mid.B > 180 && mid.R < 90,
-                    "收起态高亮贯穿整条留边而非仅端点");
+                var strong = bmp.GetPixel(5, 8);
+                Check(strong.B > 180 && strong.R < 130 && strong.G < strong.B,
+                    $"收起态 CPU 区域蓝色填充 (R={strong.R} G={strong.G} B={strong.B})");
+                var mid = bmp.GetPixel(10, 24);
+                Check(mid.R > 150 && mid.B > 180 && mid.G < 150,
+                    "内存区域固定显示紫色占用");
+                var gpu = bmp.GetPixel(10, 45);
+                Check(gpu.G > 160 && gpu.R < 150,
+                    "显卡区域固定显示绿色占用");
                 bmp.Save(Path.Combine(Output, "sliver-edge-hidden.png"), ImageFormat.Png);
 
+                ((AppSettings)typeof(WidgetForm).GetField("_settings", Hidden).GetValue(widget)).HighLoadThresholdPercent = 30;
                 SetFieldOn(widget, typeof(WidgetForm), "_activeAlertMetrics", 1);
                 g.Clear(Color.Black);
                 drawSliver.Invoke(widget, new object[] { g, bounds, 1f });
-                var alert = bmp.GetPixel(5, 30);
-                Check(alert.R > 180 && alert.R > alert.B + 60,
-                    $"高负载告警时留边高亮转橙 (R={alert.R} G={alert.G} B={alert.B})");
+                var alert = bmp.GetPixel(5, 8);
+                Check(alert.ToArgb() == strong.ToArgb(),
+                    $"CPU 持续超限时窄边仍使用固定蓝色 (R={alert.R} G={alert.G} B={alert.B})");
                 SetFieldOn(widget, typeof(WidgetForm), "_activeAlertMetrics", 0);
+                foreach (DockEdge edge in new[] { DockEdge.Left, DockEdge.Right, DockEdge.Top, DockEdge.Bottom })
+                {
+                    SetFieldOn(widget, typeof(WidgetForm), "_dockEdge", edge);
+                    g.Clear(Color.Black);
+                    drawSliver.Invoke(widget, new object[] { g, bounds, 1f });
+                    bool vertical = edge == DockEdge.Left || edge == DockEdge.Right;
+                    int across = edge == DockEdge.Left ? 195 : edge == DockEdge.Top ? 55 : 5;
+                    var cpuColor = vertical ? bmp.GetPixel(across, 8) : bmp.GetPixel(15, across);
+                    var ramColor = vertical ? bmp.GetPixel(across, 24) : bmp.GetPixel(80, across);
+                    var gpuColor = vertical ? bmp.GetPixel(across, 45) : bmp.GetPixel(150, across);
+                    Check(cpuColor.B > 180 && cpuColor.R < 130 && ramColor.R > 150 && ramColor.B > 180 &&
+                        gpuColor.G > 160 && gpuColor.R < 150,
+                        $"{edge} 停靠窄边按 CPU、内存、显卡顺序独立显示占用色");
+                }
+                SetFieldOn(widget, typeof(WidgetForm), "_dockEdge", DockEdge.Right);
+                g.Clear(Color.Black);
+                typeof(WidgetForm).GetMethod("DrawWidget", Hidden).Invoke(widget, new object[] { g, 200, 60, false });
+                Check(bmp.GetPixel(100, 30).ToArgb() == Color.Black.ToArgb(),
+                    "收起状态绘制只更新窄边内容");
+            }
+
+            SetFieldOn(widget, typeof(WidgetForm), "_snapshot", new MetricSnapshot());
+            var panel = typeof(WidgetRenderer).GetMethod("DrawPanel", BindingFlags.Static | BindingFlags.NonPublic);
+            foreach (WidgetOpacity opacity in new[] { WidgetOpacity.Opaque, WidgetOpacity.Percent75, WidgetOpacity.Percent50 })
+            {
+                ((AppSettings)typeof(WidgetForm).GetField("_settings", Hidden).GetValue(widget)).Opacity = opacity;
+                int alpha = opacity == WidgetOpacity.Opaque ? 255 : opacity == WidgetOpacity.Percent75 ? 191 : 150;
+                using (var actual = new Bitmap(200, 60))
+                using (var expected = new Bitmap(200, 60))
+                using (var actualGraphics = Graphics.FromImage(actual))
+                using (var expectedGraphics = Graphics.FromImage(expected))
+                {
+                    panel.Invoke(null, new object[] { expectedGraphics, bounds, 14, alpha, DockEdge.Right });
+                    drawSliver.Invoke(widget, new object[] { actualGraphics, bounds, 1f });
+                    Color first = actual.GetPixel(8, 30);
+                    Check(first.ToArgb() == expected.GetPixel(8, 30).ToArgb(),
+                        $"{opacity} 窄边未占用部分与完整悬浮框背景像素一致");
+                    drawSliver.Invoke(widget, new object[] { actualGraphics, bounds, 1f });
+                    Check(actual.GetPixel(8, 30).ToArgb() == first.ToArgb(),
+                        $"{opacity} 重绘窄边保持原透明度");
+                }
             }
 
             widget.ShowWidget();
@@ -497,8 +547,8 @@ internal static class Program
             int beforeHidden = widget.InvalidateCount;
             SetFieldOn(widget, typeof(WidgetForm), "_pendingSnapshot", Sample());
             typeof(WidgetForm).GetMethod("ProcessPendingSnapshot", Hidden).Invoke(widget, null);
-            Check(widget.InvalidateCount == beforeHidden,
-                "收起在边缘时数据快照不触发整帧重绘");
+            Check(widget.InvalidateCount == beforeHidden + 1,
+                "收起在边缘时数据快照刷新占用窄边");
 
             SetFieldOn(widget, typeof(WidgetForm), "_isEdgeHidden", false);
             int beforeShown = widget.InvalidateCount;
@@ -930,7 +980,7 @@ internal static class Program
                 Check(HasOptions(tray.ContextMenuStrip), "tray menu exposes same monitoring settings");
                 Check(ReferenceEquals(tray.Icon, Field(context, "_alertIcon")) &&
                     (int)Field(widget, "_activeAlertMetrics") != 0,
-                    "sustained real high load reaches tray and widget alert color");
+                    "sustained real high load reaches tray and widget alert state");
                 var actual = (MetricSnapshot)Field(widget, "_snapshot");
                 Check(actual.Gpus.Count >= 2 && actual.Gpus[0].Name.Contains("NVIDIA") &&
                     actual.VramPercent == actual.Gpus[0].Percent && tray.Text.Contains(" | "),
@@ -940,7 +990,7 @@ internal static class Program
                 widget.SetAlertState(new AlertEvaluation(true, true, "", 4, new[] { "nvidia" }));
                 widget.SetAlertState(new AlertEvaluation(true, true, "", 4, new[] { "amd" }));
                 Check(((HashSet<string>)Field(widget, "_activeGpuAlerts")).SetEquals(new[] { "amd" }),
-                    "widget refreshes individual GPU colors when aggregate VRAM alert mask remains unchanged");
+                    "widget receives individual GPU alert state when aggregate VRAM alert mask remains unchanged");
                 Console.WriteLine($"Live metrics CPU={actual.CpuPercent:0.0}% RAM={actual.MemoryPercent:0.0}% VRAM={actual.VramPercent:0.0}% used={actual.VramUsedBytes} total={actual.VramTotalBytes}");
             }
             finally
